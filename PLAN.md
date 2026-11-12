@@ -107,8 +107,11 @@ normalized title + year.
 | Prism Launcher | `instances/*/instance.cfg` | `prismlauncher -l <instance>` | Each instance = a card |
 | Emulation | user ROM folders → system by extension/folder, RetroArch cores or standalone emus (config-driven table) | template in `emulators.toml` | Art via SteamGridDB + libretro-thumbnails |
 | Manual | user adds an exe / script | native, Wine, or Proton (umu-launcher) | Picks prefix + runner on the pad |
-| Windows (later) | Steam, Epic `LauncherInstalled.dat`, GOG Galaxy db, Xbox via `Get-AppxPackage` | protocol URIs | Same trait, `cfg(windows)` |
-| macOS (later) | Steam, `/Applications` games, CrossOver bottles | `open` | |
+| Windows (M9) | Steam (registry `SteamPath`), Epic (`ProgramData\\Epic\\…\\Manifests\\*.item`), GOG Galaxy (`galaxy-2.0.db`), Xbox / Game Pass (`Get-AppxPackage` + `MicrosoftGame.config`), EA app, Ubisoft Connect, Battle.net, Amazon Games, itch, Heroic, Prism, emulators | protocol URIs (`steam://`, `com.epicgames.launcher://`, `goggalaxy://`, `uplay://`…) or the exe | Same `Source` trait, `cfg(windows)` |
+| macOS (M9) | Steam (`~/Library/Application Support/Steam`), `/Applications` with `LSApplicationCategoryType` = games, Epic, GOG Galaxy, Heroic, Battle.net, CrossOver bottles, Prism, emulators | `open -a` / protocol URIs | `cfg(target_os = "macos")` |
+
+Every scanner's paths come from a per-platform table, so one source (Steam, Heroic,
+Prism, itch, emulators) works on all three systems with only its paths changing.
 
 Emulator + runner definitions live in data files (`sources/emulators.toml`,
 `launch/runners.toml`), not code.
@@ -314,7 +317,15 @@ Each one ends usable and committed.
 7. **M7 — More sources:** Bottles, itch, Prism, emulators, manual Wine/Proton
    (umu-launcher).
 8. **M8 — Session mode:** gamescope session, quick menu, power menu.
-9. **M9 — Windows/macOS sources**, packaging (AUR, Flatpak, AppImage).
+9. **M9 — Windows, macOS and every Linux distro:**
+   - Windows and macOS sources from §4.
+   - Launch tracking per platform behind one trait: systemd scope on Linux, with
+     a process-group fallback for distros without systemd (Void, Alpine, Gentoo,
+     Artix); Job Objects on Windows; process watching on macOS. `/proc` scans
+     move to the `sysinfo` crate.
+   - Packages: Flatpak, AppImage, AUR, .deb, .rpm; a Windows installer (winget);
+     a signed macOS `.app` / `.dmg`.
+   - Session mode (M8) stays Linux only; elsewhere the app runs fullscreen.
 
 ## 10. Quality bars
 
