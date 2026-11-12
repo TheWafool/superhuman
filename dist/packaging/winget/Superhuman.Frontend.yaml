@@ -4,7 +4,7 @@ PackageIdentifier: Superhuman.Frontend
 PackageVersion: 0.1.0
 PackageName: Superhuman
 Publisher: Superhuman
-License: Proprietary
+License: GPL-3.0-or-later
 ShortDescription: Controller-first game launcher
 PackageLocale: en-US
 InstallerType: zip

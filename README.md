@@ -40,3 +40,7 @@ cargo build --release
 On Linux you need `libxkbcommon` and `libudev` (most desktops already have them). `--fullscreen` starts full screen. `dist/superhuman-session` runs it as a console-style login session inside gamescope.
 
 Packaging files for deb, rpm, Arch (PKGBUILD), Flatpak, AppImage, a macOS `.dmg` and winget are in `dist/packaging/`.
+
+## License
+
+GPL-3.0-or-later. See `LICENSE`.
