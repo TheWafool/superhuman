@@ -18,12 +18,18 @@ jobs:
       - run: cargo build --release --locked
       - run: cargo deb --no-build
       - run: cargo generate-rpm
+      # PKGBUILD for Arch, pointed at this tag's source.
+      - run: |
+          V=${GITHUB_REF_NAME#v}
+          SUM=$(curl -sL "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz" | sha256sum | cut -d' ' -f1)
+          sed -e "s/^pkgver=.*/pkgver=$V/" -e "s/^sha256sums=.*/sha256sums=('$SUM')/" dist/packaging/PKGBUILD > PKGBUILD
       - uses: softprops/action-gh-release@v2
         with:
           prerelease: true
           files: |
             target/debian/*.deb
             target/generate-rpm/*.rpm
+            PKGBUILD
   windows:
     runs-on: windows-latest
     steps:

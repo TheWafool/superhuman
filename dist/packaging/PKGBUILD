@@ -1,4 +1,4 @@
-# Arch / CachyOS. Build from a checkout: `makepkg -si` in this folder (uses the repo two levels up).
+# Arch / CachyOS: download this file, then run `makepkg -si` in its folder.
 pkgname=superhuman
 pkgver=0.1.0
 pkgrel=1
@@ -8,19 +8,23 @@ license=(GPL-3.0-or-later)
 url="https://github.com/TheWafool/superhuman"
 depends=(gcc-libs libxkbcommon vulkan-icd-loader)
 makedepends=(cargo)
+# Distro LTO flags make C deps (bundled SQLite) bitcode that the Rust link can't use.
+options=(!lto)
 optdepends=('gamescope: session mode' 'umu-launcher: run Windows games with Proton')
-source=()
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('8f78efdc49480191492dabc6c53ded2bfa3dd9bf518b0e9a22c64194317d8b48')
 
 build() {
-  cd "$startdir/../.."
-  cargo build --release --locked --target-dir "$srcdir/target"
+  cd "$pkgname-$pkgver"
+  cargo build --release --locked
 }
 
 package() {
-  cd "$startdir/../.."
-  install -Dm755 "$srcdir/target/release/superhuman" "$pkgdir/usr/bin/superhuman"
+  cd "$pkgname-$pkgver"
+  install -Dm755 target/release/superhuman "$pkgdir/usr/bin/superhuman"
   install -Dm644 dist/superhuman.desktop "$pkgdir/usr/share/applications/superhuman.desktop"
   install -Dm644 dist/superhuman.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/superhuman.png"
   install -Dm755 dist/superhuman-session "$pkgdir/usr/bin/superhuman-session"
   install -Dm644 dist/superhuman-session.desktop "$pkgdir/usr/share/wayland-sessions/superhuman.desktop"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
