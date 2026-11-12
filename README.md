@@ -4,6 +4,14 @@
 
 A game launcher made for the couch and a controller. It finds the games you already have, from every launcher and store, and puts them on one shelf with proper art. Pick one and play, without ever seeing a desktop.
 
+![Library](docs/screenshots/home.png)
+
+| Search | Menu | Settings |
+|---|---|---|
+| ![Search](docs/screenshots/search.png) | ![Menu](docs/screenshots/menu.png) | ![Settings](docs/screenshots/settings.png) |
+
+<sub>Screenshots use the built-in demo library, so the games show placeholder art. Real games get their covers from Steam and SteamGridDB.</sub>
+
 Works on Linux. Windows and macOS builds exist but are still untested.
 
 ## Where it finds games
