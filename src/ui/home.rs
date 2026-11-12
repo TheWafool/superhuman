@@ -214,7 +214,7 @@ fn shelves(app: &App) -> Element<'_, Message> {
 }
 
 /// Placeholder cover (real art in M3): game colours with the title in the display face.
-fn cover_tile(app: &App, game: usize, w: f32, h: f32, focus: f32, dim: f32) -> Element<'_, Message> {
+pub(crate) fn cover_tile(app: &App, game: usize, w: f32, h: f32, focus: f32, dim: f32) -> Element<'_, Message> {
     let g = &app.games[game];
     let (accent, ambient) = (g.accent, g.ambient);
     let fill = Gradient::Linear(

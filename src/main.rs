@@ -6,6 +6,7 @@ mod input;
 mod launch;
 mod library;
 mod meta;
+mod osk;
 mod sources;
 mod store;
 mod theme;
@@ -47,6 +48,8 @@ fn main() -> iced::Result {
 pub enum Message {
     Pad(PadEvent),
     Key(Action, bool),
+    /// Raw keyboard input, for typing.
+    RawKey(keyboard::Key, Option<String>, bool),
     Frame(Instant),
     Tick,
     Resized(Size),
@@ -73,6 +76,28 @@ pub enum Screen {
     Match,
     /// Art picker.
     Art,
+    /// Search with filters and the on-screen keyboard.
+    Search,
+    /// Text entry for something else (see `typing_for`).
+    Typing,
+    Settings,
+    /// Hidden games, to unhide.
+    Hidden,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypingFor {
+    MatchName,
+    ApiKey,
+}
+
+/// Settings rows, in order. Labels and values come from `App::settings_rows`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingRow {
+    ApiKey,
+    ReduceMotion,
+    Rescan,
+    Hidden,
 }
 
 /// Game page buttons, in order. Labels come from `App::page_buttons`.
@@ -168,6 +193,19 @@ pub struct App {
     pub overrides: HashMap<String, art::Override>,
     pub meta: HashMap<String, (meta::Meta, i64)>,
     meta_loading: HashSet<String>,
+
+    pub osk: osk::Osk,
+    pub typing_for: TypingFor,
+    /// Search: filter tab, results, and whether focus is on the results strip.
+    pub filter: usize,
+    pub results: Vec<usize>,
+    pub on_results: bool,
+    pub result_col: usize,
+    /// Where Back on the game page goes.
+    page_return: Screen,
+    /// Name searched on the match screen.
+    pub match_term: String,
+    pub hidden: Vec<store::Row>,
 }
 
 impl App {
@@ -234,7 +272,7 @@ impl App {
             held: None,
             last_frame: None,
             scale: 900.0 / theme::DESIGN_HEIGHT,
-            reduce_motion: std::env::var_os("SUPERMAN_REDUCE_MOTION").is_some(),
+            reduce_motion: false,
             toast: None,
             clock: Local::now(),
             session: None,
@@ -254,9 +292,19 @@ impl App {
             overrides,
             meta: meta_cache,
             meta_loading: HashSet::new(),
+            osk: osk::Osk::default(),
+            typing_for: TypingFor::MatchName,
+            filter: 0,
+            results: Vec::new(),
+            on_results: false,
+            result_col: 0,
+            page_return: Screen::Home,
+            match_term: String::new(),
+            hidden: Vec::new(),
             games: Vec::new(),
             shelves: Vec::new(),
         };
+        app.reduce_motion = app.config.reduce_motion || std::env::var_os("SUPERMAN_REDUCE_MOTION").is_some();
         app.set_library(games);
         app.snap_animations();
         app
@@ -480,6 +528,15 @@ impl App {
                 return self.prewarm();
             }
             Message::Key(a, false) => self.release(a),
+            Message::RawKey(key, text, pressed) => {
+                if pressed && self.typing() && !self.overlay && self.type_key(&key, text.as_deref()) {
+                    self.pad = PadKind::Keyboard;
+                    return Task::none();
+                }
+                if let Some(a) = input::map_key(&key) {
+                    return self.handle(Message::Key(a, pressed));
+                }
+            }
             Message::Frame(now) => {
                 self.frame(now);
                 // Held-direction repeats move focus from here.
@@ -645,10 +702,14 @@ impl App {
             Screen::Game => return self.act_page(a),
             Screen::Match => return self.act_match(a),
             Screen::Art => return self.act_art(a),
+            Screen::Search => return self.act_search(a),
+            Screen::Typing => return self.act_typing(a),
+            Screen::Settings => return self.act_settings(a),
+            Screen::Hidden => return self.act_hidden(a),
         }
         match (self.focus, a) {
-            (_, Action::Search) => self.notice("Search arrives in milestone 6."),
-            (_, Action::Menu) => self.notice("The quick menu arrives in milestone 8."),
+            (_, Action::Search) => self.open_search(),
+            (_, Action::Menu) => self.open_settings(),
             (Focus::Hero(_), Action::Left) => self.focus = Focus::Hero(0),
             (Focus::Hero(_), Action::Right) => self.focus = Focus::Hero(1),
             (Focus::Hero(_), Action::Down | Action::Back) => self.focus = Focus::Shelf,
@@ -802,6 +863,7 @@ impl App {
             return;
         }
         self.screen = Screen::Game;
+        self.page_return = Screen::Home;
         self.page_focus = 0;
         self.hide_armed = false;
         let g = &self.games[self.selected];
@@ -833,7 +895,12 @@ impl App {
         match a {
             Action::Left => self.page_focus = self.page_focus.saturating_sub(1),
             Action::Right => self.page_focus = (self.page_focus + 1).min(n - 1),
-            Action::Back => self.screen = Screen::Home,
+            Action::Back => {
+                self.screen = self.page_return;
+                if self.screen == Screen::Home {
+                    self.focus_game(self.selected);
+                }
+            }
             Action::Confirm => {
                 let (b, _) = self.page_buttons()[self.page_focus];
                 if b != PageButton::Hide {
@@ -861,14 +928,7 @@ impl App {
             PageButton::FixMatch | PageButton::ChangeArt if has_key.is_none() => {
                 self.notice("Add a SteamGridDB API key to config.toml to pick art.");
             }
-            PageButton::FixMatch => {
-                self.screen = Screen::Match;
-                self.list_focus = 0;
-                self.candidates = None;
-                let id = g.id.clone();
-                let key = has_key.unwrap_or_default();
-                self.pending.push(Task::perform(art::search(self.http.clone(), key, g.title.clone()), move |l| Message::Candidates(id.clone(), l)));
-            }
+            PageButton::FixMatch => self.search_matches(g.title.clone()),
             PageButton::ChangeArt => {
                 self.screen = Screen::Art;
                 self.open_slot(art::Slot::Cover);
@@ -904,8 +964,15 @@ impl App {
     }
 
     fn act_match(&mut self, a: Action) {
-        // Rows: each candidate, then "None of these".
-        let n = self.candidates.as_ref().map_or(0, |c| c.len() + 1);
+        // Rows: each candidate, "Search by another name", then "None of these".
+        let n = self.candidates.as_ref().map_or(0, |c| c.len() + 2);
+        let c_len = n.saturating_sub(2);
+        if a == Action::Confirm && n > 0 && self.list_focus == c_len {
+            self.typing_for = TypingFor::MatchName;
+            self.osk = osk::Osk::new(&self.games[self.selected].title, false);
+            self.screen = Screen::Typing;
+            return;
+        }
         match a {
             Action::Up => self.list_focus = self.list_focus.saturating_sub(1),
             Action::Down if n > 0 => self.list_focus = (self.list_focus + 1).min(n - 1),
@@ -950,6 +1017,272 @@ impl App {
         }
     }
 
+    fn search_matches(&mut self, term: String) {
+        self.screen = Screen::Match;
+        self.list_focus = 0;
+        self.candidates = None;
+        self.match_term = term.clone();
+        let id = self.games[self.selected].id.clone();
+        let key = self.config.steamgriddb_api_key.clone().unwrap_or_default();
+        self.pending.push(Task::perform(art::search(self.http.clone(), key, term), move |l| Message::Candidates(id.clone(), l)));
+    }
+
+    /// Put shelf focus on a game (after visiting it from search).
+    fn focus_game(&mut self, gi: usize) {
+        let found = self.shelves.iter().enumerate().find_map(|(r, s)| s.games.iter().position(|&g| g == gi).map(|c| (r, c)));
+        if let Some((r, c)) = found {
+            self.row = r;
+            self.cols[r] = c;
+            self.focus = Focus::Shelf;
+        }
+        self.sync_focus();
+    }
+
+    pub fn typing(&self) -> bool {
+        matches!(self.screen, Screen::Search | Screen::Typing)
+    }
+
+    /// Physical keyboard typing. Returns true if the key was used.
+    fn type_key(&mut self, key: &keyboard::Key, text: Option<&str>) -> bool {
+        use keyboard::key::Named;
+        let out = match key {
+            keyboard::Key::Named(Named::Backspace) => self.osk.delete(),
+            keyboard::Key::Named(Named::Enter) => osk::Out::Done,
+            keyboard::Key::Named(Named::Escape) => return false,
+            _ => match text.filter(|t| !t.is_empty() && t.chars().all(|c| !c.is_control())) {
+                Some(t) => {
+                    for c in t.chars() {
+                        self.osk.push(c);
+                    }
+                    osk::Out::Changed
+                }
+                None => return false,
+            },
+        };
+        self.osk_out(out);
+        true
+    }
+
+    /// React to the keyboard's result on whichever screen owns it.
+    fn osk_out(&mut self, out: osk::Out) {
+        match (self.screen, out) {
+            (Screen::Search, osk::Out::Changed) => self.refresh_results(),
+            (Screen::Search, osk::Out::Done | osk::Out::LeaveUp) if !self.results.is_empty() => self.on_results = true,
+            (Screen::Typing, osk::Out::Done) => self.finish_typing(),
+            _ => {}
+        }
+    }
+
+    /// Pad shortcuts shared by every keyboard screen. Returns true if used.
+    fn osk_pad(&mut self, a: Action) -> bool {
+        let out = match a {
+            Action::Up => self.osk.up(),
+            Action::Down => {
+                self.osk.down();
+                osk::Out::Nothing
+            }
+            Action::Left => {
+                self.osk.left();
+                osk::Out::Nothing
+            }
+            Action::Right => {
+                self.osk.right();
+                osk::Out::Nothing
+            }
+            Action::Confirm => self.osk.press(),
+            Action::Details => self.osk.delete(),
+            Action::Search => self.osk.push(' '),
+            Action::Menu => osk::Out::Done,
+            _ => return false,
+        };
+        self.osk_out(out);
+        true
+    }
+
+    fn open_search(&mut self) {
+        self.screen = Screen::Search;
+        self.osk = osk::Osk::new("", false);
+        self.on_results = false;
+        self.refresh_results();
+    }
+
+    /// Filter tabs that have games, as indices into `library::FILTERS`.
+    pub fn filters(&self) -> Vec<usize> {
+        (0..library::FILTERS.len()).filter(|&i| self.games.iter().any(library::FILTERS[i].filter)).collect()
+    }
+
+    fn refresh_results(&mut self) {
+        let f = &library::FILTERS[self.filter.min(library::FILTERS.len() - 1)];
+        self.results = library::search(&self.games, &self.osk.text, f);
+        self.result_col = 0;
+        if self.results.is_empty() {
+            self.on_results = false;
+        }
+    }
+
+    fn act_search(&mut self, a: Action) {
+        match a {
+            Action::PrevTab | Action::NextTab => {
+                let tabs = self.filters();
+                let i = tabs.iter().position(|&t| t == self.filter).unwrap_or(0);
+                let j = if a == Action::NextTab { (i + 1).min(tabs.len() - 1) } else { i.saturating_sub(1) };
+                self.filter = tabs.get(j).copied().unwrap_or(0);
+                self.refresh_results();
+            }
+            Action::Back if self.on_results => self.on_results = false,
+            Action::Back => {
+                self.screen = Screen::Home;
+                self.sync_focus();
+            }
+            _ if self.on_results => match a {
+                Action::Left => self.result_col = self.result_col.saturating_sub(1),
+                Action::Right => self.result_col = (self.result_col + 1).min(self.results.len().saturating_sub(1)),
+                Action::Down => self.on_results = false,
+                Action::Confirm | Action::Details => {
+                    if let Some(&gi) = self.results.get(self.result_col) {
+                        if gi != self.selected {
+                            self.prev_selected = None;
+                            self.selected = gi;
+                            let g = &self.games[gi];
+                            self.ambient_to = (g.ambient, g.accent);
+                            self.ambient_from = self.ambient_to;
+                            self.prewarmed_for = usize::MAX;
+                        }
+                        self.details();
+                        self.page_return = Screen::Search;
+                    }
+                }
+                _ => {}
+            },
+            _ => {
+                self.osk_pad(a);
+            }
+        }
+    }
+
+    fn finish_typing(&mut self) {
+        let text = self.osk.text.trim().to_owned();
+        match self.typing_for {
+            TypingFor::MatchName if !text.is_empty() => self.search_matches(text),
+            TypingFor::MatchName => self.screen = Screen::Match,
+            TypingFor::ApiKey => {
+                let key = (!text.is_empty()).then(|| text.clone());
+                match config::update(|c| c.steamgriddb_api_key = key.clone()) {
+                    Ok(()) => {
+                        let had = self.config.steamgriddb_api_key.is_some();
+                        self.config.steamgriddb_api_key = key;
+                        self.notice(if self.config.steamgriddb_api_key.is_some() { "Saved the SteamGridDB key" } else { "Removed the SteamGridDB key" });
+                        if !had {
+                            let t = self.queue_art();
+                            self.pending.push(t);
+                        }
+                    }
+                    Err(e) => self.notice(&format!("Couldn't save settings: {e}")),
+                }
+                self.screen = Screen::Settings;
+            }
+        }
+    }
+
+    fn act_typing(&mut self, a: Action) {
+        if a == Action::Back {
+            self.screen = match self.typing_for {
+                TypingFor::MatchName => Screen::Match,
+                TypingFor::ApiKey => Screen::Settings,
+            };
+            return;
+        }
+        self.osk_pad(a);
+    }
+
+    fn open_settings(&mut self) {
+        self.screen = Screen::Settings;
+        self.list_focus = 0;
+    }
+
+    pub fn settings_rows(&self) -> Vec<(SettingRow, &'static str, String)> {
+        let key = match &self.config.steamgriddb_api_key {
+            Some(k) if k.len() > 4 => format!("Set, ending {}", &k[k.len() - 4..]),
+            Some(_) => "Set".into(),
+            None => "Not set. Needed for art of non-Steam games".into(),
+        };
+        let hidden = self.store.as_ref().and_then(|s| s.load().ok()).map_or(0, |r| r.iter().filter(|r| r.hidden).count());
+        vec![
+            (SettingRow::ApiKey, "SteamGridDB API key", key),
+            (SettingRow::ReduceMotion, "Reduce motion", if self.reduce_motion { "On".into() } else { "Off".into() }),
+            (SettingRow::Rescan, "Look for new games", if self.scanning { "Looking…".into() } else { "Checks every launcher now".into() }),
+            (SettingRow::Hidden, "Hidden games", if hidden == 0 { "None".into() } else { format!("{hidden}") }),
+        ]
+    }
+
+    fn act_settings(&mut self, a: Action) {
+        let rows = self.settings_rows();
+        match a {
+            Action::Up => self.list_focus = self.list_focus.saturating_sub(1),
+            Action::Down => self.list_focus = (self.list_focus + 1).min(rows.len() - 1),
+            Action::Back | Action::Menu => {
+                self.screen = Screen::Home;
+                self.sync_focus();
+            }
+            Action::Confirm => match rows[self.list_focus].0 {
+                SettingRow::ApiKey => {
+                    self.typing_for = TypingFor::ApiKey;
+                    let cur = self.config.steamgriddb_api_key.clone().unwrap_or_default();
+                    self.osk = osk::Osk::new(&cur, true);
+                    self.screen = Screen::Typing;
+                }
+                SettingRow::ReduceMotion => {
+                    let on = !self.reduce_motion;
+                    self.reduce_motion = on;
+                    if let Err(e) = config::update(|c| c.reduce_motion = on) {
+                        self.notice(&format!("Couldn't save settings: {e}"));
+                    }
+                }
+                SettingRow::Rescan => {
+                    let t = self.rescan();
+                    self.pending.push(t);
+                }
+                SettingRow::Hidden => {
+                    self.load_hidden();
+                    self.screen = Screen::Hidden;
+                    self.list_focus = 0;
+                }
+            },
+            _ => {}
+        }
+    }
+
+    fn load_hidden(&mut self) {
+        self.hidden = self.store.as_ref().and_then(|s| s.load().ok()).unwrap_or_default().into_iter().filter(|r| r.hidden).collect();
+        self.hidden.sort_by_cached_key(|r| r.title.to_lowercase());
+    }
+
+    fn act_hidden(&mut self, a: Action) {
+        match a {
+            Action::Up => self.list_focus = self.list_focus.saturating_sub(1),
+            Action::Down => self.list_focus = (self.list_focus + 1).min(self.hidden.len().saturating_sub(1)),
+            Action::Back => {
+                self.screen = Screen::Settings;
+                self.list_focus = 3;
+            }
+            Action::Confirm => {
+                let Some(r) = self.hidden.get(self.list_focus) else { return };
+                let (id, title) = (r.id.clone(), r.title.clone());
+                if let Some(store) = &self.store {
+                    let _ = store.set_hidden(&[id], false);
+                    let games = library::from_rows(store.load().unwrap_or_default());
+                    self.set_library(games);
+                }
+                self.load_hidden();
+                self.list_focus = self.list_focus.min(self.hidden.len().saturating_sub(1));
+                self.notice(&format!("{title} is back in your library"));
+                let t = self.queue_art();
+                self.pending.push(t);
+            }
+            _ => {}
+        }
+    }
+
     fn set_override(&mut self, id: &str, o: art::Override) {
         if let Some(store) = &self.store {
             let _ = store.save_override(id, &o);
@@ -967,8 +1300,12 @@ impl App {
             if self.session.is_some() { time::every(Duration::from_secs(1)).map(|_| Message::Poll) } else { Subscription::none() },
             input::gamepads().map(Message::Pad),
             keyboard::listen().filter_map(|e| match e {
-                keyboard::Event::KeyPressed { key, repeat: false, .. } => input::map_key(&key).map(|a| Message::Key(a, true)),
-                keyboard::Event::KeyReleased { key, .. } => input::map_key(&key).map(|a| Message::Key(a, false)),
+                keyboard::Event::KeyPressed { key, text, repeat: false, .. } => Some(Message::RawKey(key, text.map(|t| t.to_string()), true)),
+                // Held keys repeat for typing (backspace) but not for navigation.
+                keyboard::Event::KeyPressed { key: key @ keyboard::Key::Named(keyboard::key::Named::Backspace), repeat: true, .. } => {
+                    Some(Message::RawKey(key, None, true))
+                }
+                keyboard::Event::KeyReleased { key, .. } => Some(Message::RawKey(key, None, false)),
                 _ => None,
             }),
             window::resize_events().map(|(_, s)| Message::Resized(s)),
@@ -988,6 +1325,10 @@ impl App {
             Screen::Game => ui::game::view(self),
             Screen::Match => ui::game::matches(self),
             Screen::Art => ui::game::art_picker(self),
+            Screen::Search => ui::search::view(self),
+            Screen::Typing => ui::search::typing(self),
+            Screen::Settings => ui::settings::view(self),
+            Screen::Hidden => ui::settings::hidden(self),
         };
         let mut layers = iced::widget::stack![base];
         if self.playing.get() > 0.005 {

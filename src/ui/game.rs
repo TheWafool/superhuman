@@ -85,10 +85,9 @@ fn details(app: &App) -> Element<'_, Message> {
 }
 
 pub fn matches(app: &App) -> Element<'_, Message> {
-    let game = &app.games[app.selected];
     let head = column![
         text("Which game is this?").size(size::XL).font(display(Weight::ExtraBold)),
-        text(format!("SteamGridDB results for \u{201C}{}\u{201D}. The one you pick decides its art.", game.title)).size(size::S).color(HAZE),
+        text(format!("SteamGridDB results for \u{201C}{}\u{201D}. The one you pick decides its art.", app.match_term)).size(size::S).color(HAZE),
     ]
     .spacing(14);
 
@@ -97,6 +96,7 @@ pub fn matches(app: &App) -> Element<'_, Message> {
         None => list = list.push(text("Searching…").size(size::S).color(HAZE)),
         Some(c) => {
             let mut rows: Vec<(String, Option<String>)> = c.iter().map(|c| (c.name.clone(), c.year.map(|y| y.to_string()))).collect();
+            rows.push(("Search by another name".into(), None));
             rows.push(("None of these. Use a title card".into(), None));
             // A window of rows around focus.
             let start = app.list_focus.saturating_sub(4).min(rows.len().saturating_sub(9));
@@ -110,7 +110,7 @@ pub fn matches(app: &App) -> Element<'_, Message> {
     screen(app, content.into(), &[(Action::Confirm, "Pick"), (Action::Back, "Back")])
 }
 
-fn list_row<'a>(name: String, year: Option<String>, focused: bool) -> Element<'a, Message> {
+pub(crate) fn list_row<'a>(name: String, year: Option<String>, focused: bool) -> Element<'a, Message> {
     let fg = if focused { NIGHT } else { PAPER };
     let mut r = row![text(name).size(size::S).font(body(Weight::Bold)).color(fg)].spacing(20).align_y(alignment::Vertical::Center);
     if let Some(y) = year {
@@ -217,7 +217,7 @@ fn framed<'a>(inner: Option<Element<'a, Message>>, w: f32, h: f32, focused: bool
 }
 
 /// Shared frame: the game's art behind, a darker wash for the list screens, footer hints.
-fn screen<'a>(app: &'a App, content: Element<'a, Message>, hints: &[(Action, &'static str)]) -> Element<'a, Message> {
+pub(crate) fn screen<'a>(app: &'a App, content: Element<'a, Message>, hints: &[(Action, &'static str)]) -> Element<'a, Message> {
     let mut r = row![].spacing(36).align_y(alignment::Vertical::Center);
     for &(a, label) in hints {
         r = r.push(row![glyph(app.pad.glyph(a)), text(label).size(size::XS).color(alpha(PAPER, 0.8))].spacing(12).align_y(alignment::Vertical::Center));

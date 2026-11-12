@@ -219,6 +219,47 @@ pub const SHELVES: &[ShelfDef] = &[
     ShelfDef { title: "All games", filter: |_| true, by_recent: false, limit: usize::MAX },
 ];
 
+/// Filter tabs on the search screen (LB/RB). Tabs with no games are skipped.
+pub struct FilterDef {
+    pub label: &'static str,
+    pub filter: fn(&Game) -> bool,
+}
+
+pub const FILTERS: &[FilterDef] = &[
+    FilterDef { label: "All games", filter: |_| true },
+    FilterDef { label: "Favourites", filter: |g| g.favorite },
+    FilterDef { label: "Steam", filter: |g| g.source == Source::Steam },
+    FilterDef { label: "Heroic", filter: |g| g.source == Source::Heroic },
+    FilterDef { label: "Lutris", filter: |g| g.source == Source::Lutris },
+    FilterDef { label: "Emulation", filter: |g| g.source == Source::Emulation },
+    FilterDef { label: "Flatpak and system", filter: |g| matches!(g.source, Source::Flatpak | Source::Desktop | Source::Prism) },
+];
+
+/// Games matching `query` within a filter, best first. Empty query lists all, by title.
+pub fn search(games: &[Game], query: &str, filter: &FilterDef) -> Vec<usize> {
+    let q = query.trim().to_lowercase();
+    let qk = match_key(&q);
+    let mut hits: Vec<(i32, usize)> = (0..games.len())
+        .filter(|&i| (filter.filter)(&games[i]))
+        .filter_map(|i| {
+            if q.is_empty() {
+                return Some((0, i));
+            }
+            let t = games[i].title.to_lowercase();
+            if let Some(pos) = t.find(&q) {
+                // Whole-title prefix beats word start beats anywhere.
+                let word_start = pos == 0 || !t.as_bytes()[pos - 1].is_ascii_alphanumeric();
+                return Some((if pos == 0 { 300 } else if word_start { 200 } else { 100 }, i));
+            }
+            // Letters in order ("hk" finds Hollow Knight).
+            let mut it = match_key(&t).chars().collect::<Vec<_>>().into_iter();
+            qk.chars().all(|c| it.any(|x| x == c)).then_some((10, i))
+        })
+        .collect();
+    hits.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| games[a.1].title.to_lowercase().cmp(&games[b.1].title.to_lowercase())));
+    hits.into_iter().map(|h| h.1).collect()
+}
+
 pub struct Shelf {
     pub title: &'static str,
     /// Indices into the library.
@@ -306,6 +347,15 @@ mod tests {
             favorite: false,
             hidden: false,
         }
+    }
+
+    #[test]
+    fn searches() {
+        let games = from_rows(vec![row(Source::Steam, "Hollow Knight", None), row(Source::Steam, "Knights of Pen", None), row(Source::Lutris, "Diablo", None)]);
+        let r: Vec<_> = search(&games, "kni", &FILTERS[0]).iter().map(|&i| games[i].title.clone()).collect();
+        assert_eq!(r, vec!["Knights of Pen", "Hollow Knight"]);
+        assert_eq!(search(&games, "hk", &FILTERS[0]).len(), 1);
+        assert_eq!(search(&games, "", &FILTERS[4]).len(), 1);
     }
 
     #[test]

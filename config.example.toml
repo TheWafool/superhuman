@@ -3,3 +3,6 @@
 # Free key from https://www.steamgriddb.com/profile/preferences/api
 # Used for art of non-Steam games. Can also be set with SUPERMAN_STEAMGRIDDB_KEY.
 steamgriddb_api_key = ""
+
+# Instant movement instead of animation.
+reduce_motion = false
