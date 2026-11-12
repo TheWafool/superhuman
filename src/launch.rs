@@ -47,6 +47,8 @@ pub struct Session {
     pub running_since: Option<Instant>,
     pid: u32,
     unit: Option<String>,
+    /// Running in its own process group (no systemd).
+    grouped: bool,
     cgroup: Option<PathBuf>,
     exited: Arc<AtomicBool>,
     watch: Option<String>,
@@ -58,6 +60,9 @@ pub fn start(game_id: &str, title: &str, spec: &LaunchSpec) -> Result<Session, S
     let LaunchSpec::Command { program, args, env, cwd } = spec;
     let scoped = on_path("systemd-run");
     let unit = scoped.then(|| unit_name(game_id));
+    // Without systemd (Void, Alpine, Gentoo, macOS) the game gets its own process group instead,
+    // which `kill -0 -- -pgid` can watch and `kill -- -pgid` can stop.
+    let grouped = unit.is_none() && cfg!(unix);
     let mut cmd = match &unit {
         Some(u) => {
             let mut c = Command::new("systemd-run");
@@ -67,6 +72,10 @@ pub fn start(game_id: &str, title: &str, spec: &LaunchSpec) -> Result<Session, S
         None => Command::new(program),
     };
     cmd.args(args).envs(env.iter().map(|(k, v)| (k, v)));
+    #[cfg(unix)]
+    if grouped {
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    }
     if let Some(d) = cwd {
         cmd.current_dir(d);
     }
@@ -91,6 +100,7 @@ pub fn start(game_id: &str, title: &str, spec: &LaunchSpec) -> Result<Session, S
         running_since: None,
         pid,
         unit,
+        grouped,
         cgroup: None,
         exited,
         watch: watch_pattern(game_id),
@@ -137,6 +147,7 @@ impl Session {
         }
         match &self.cgroup {
             Some(cg) => std::fs::read_to_string(cg.join("cgroup.procs")).is_ok_and(|s| !s.trim().is_empty()),
+            None if self.grouped => Command::new("kill").args(["-0", "--", &format!("-{}", self.pid)]).stderr(Stdio::null()).status().is_ok_and(|s| s.success()),
             None => !self.exited.load(Ordering::Relaxed),
         }
     }
@@ -168,6 +179,8 @@ impl Session {
             }
         } else if let Some(u) = &self.unit {
             let _ = Command::new("systemctl").args(["--user", "stop", &format!("{u}.scope")]).status();
+        } else if self.grouped {
+            let _ = Command::new("kill").args(["-TERM", "--", &format!("-{}", self.pid)]).status();
         } else {
             terminate(self.pid);
         }
@@ -185,16 +198,18 @@ fn terminate(pid: u32) {
 
 /// Pids whose command line contains `pattern` (excluding launcher hand-off commands).
 fn find(pattern: &str) -> Vec<u32> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let me = std::process::id();
-    let Ok(dir) = std::fs::read_dir("/proc") else { return Vec::new() };
-    dir.flatten()
-        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
-        .filter(|&pid| pid != me)
-        .filter(|pid| {
-            let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else { return false };
-            let cmd = String::from_utf8_lossy(&raw).replace('\0', " ");
-            matches_cmd(&cmd, pattern)
+    let Ok(mut sys) = System::new() else { return Vec::new() };
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always));
+    sys.processes()
+        .iter()
+        .filter(|(pid, _)| pid.as_u32() != me)
+        .filter(|(_, p)| {
+            let cmd = p.cmd().iter().map(|a| a.to_string_lossy()).collect::<Vec<_>>().join(" ");
+            matches_cmd(&format!("{cmd} "), pattern)
         })
+        .map(|(pid, _)| pid.as_u32())
         .collect()
 }
 
