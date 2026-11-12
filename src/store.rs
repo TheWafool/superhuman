@@ -160,23 +160,17 @@ impl Store {
     /// game_id → (art, fetched_at unix, fetched with a SteamGridDB key)
     pub fn load_art(&self) -> rusqlite::Result<HashMap<String, (Art, i64, bool)>> {
         let mut stmt = self.conn.prepare("SELECT game_id, cover, hero, logo, backdrop, ambient, accent, fetched_at, with_key FROM art_v2")?;
-        let p = |s: Option<String>| s.map(PathBuf::from).filter(|p| p.is_file());
         let rows = stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                (
-                    Art {
-                        cover: p(r.get(1)?),
-                        hero: p(r.get(2)?),
-                        logo: p(r.get(3)?),
-                        backdrop: p(r.get(4)?),
-                        ambient: r.get(5)?,
-                        accent: r.get(6)?,
-                    },
-                    r.get(7)?,
-                    r.get(8)?,
-                ),
-            ))
+            // A file that was deleted (cache cleared) marks the row stale so it's fetched again.
+            let mut missing = false;
+            let mut p = |s: Option<String>| {
+                let path = s.map(PathBuf::from);
+                missing |= path.as_ref().is_some_and(|p| !p.is_file());
+                path.filter(|p| p.is_file())
+            };
+            let art = Art { cover: p(r.get(1)?), hero: p(r.get(2)?), logo: p(r.get(3)?), backdrop: p(r.get(4)?), ambient: r.get(5)?, accent: r.get(6)? };
+            let at: i64 = r.get(7)?;
+            Ok((r.get::<_, String>(0)?, (art, if missing { 0 } else { at }, r.get(8)?)))
         })?;
         Ok(rows.flatten().collect())
     }
