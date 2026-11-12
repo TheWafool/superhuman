@@ -42,7 +42,7 @@ fn main() -> iced::Result {
     if instance::claim(&instance::Remote::from_args()) {
         return Ok(());
     }
-    let fullscreen = std::env::args().any(|a| a == "--fullscreen" || a == "--session");
+    let fullscreen = std::env::args().any(|a| a == "--fullscreen" || a == "--session") || config::load().fullscreen;
     let mut app = iced::application(App::new, App::update, App::view)
         .title("Superman")
         .subscription(App::subscription)
@@ -84,8 +84,33 @@ pub enum Message {
     WindowFocus(bool),
     /// A request from a second copy of the app.
     Remote(instance::Remote),
+    /// A clicked button hint: same as pressing that button.
+    Act(Action),
+    /// A clicked item: focuses it, or activates it if already focused.
+    Point(Target),
+    /// Mouse wheel: positive = up.
+    Wheel(f32),
+    /// Right click: Back.
+    RightClick,
     DevShoot,
     DevShot(window::Screenshot),
+}
+
+/// Something the mouse can click.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    /// Home shelf cover (row, column).
+    Card(usize, usize),
+    /// Home hero button.
+    Hero(usize),
+    /// Row in a list screen (settings, hidden, match, sources).
+    Row(usize),
+    /// Game page button.
+    Page(usize),
+    /// System menu entry.
+    Menu(usize),
+    /// Search result.
+    Result(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,6 +129,8 @@ pub enum Screen {
     Settings,
     /// Hidden games, to unhide.
     Hidden,
+    /// Game sources on/off.
+    Sources,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,12 +142,42 @@ pub enum TypingFor {
 /// Settings rows, in order. Labels and values come from `App::settings_rows`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingRow {
-    ApiKey,
-    ReduceMotion,
-    Autostart,
     Rescan,
+    Sources,
     Hidden,
+    GamesFile,
+    EmulatorsFile,
+    Prompts,
+    SwapConfirm,
+    Fullscreen,
+    ReduceMotion,
+    Clock,
+    ApiKey,
+    Autostart,
+    About,
 }
+
+impl SettingRow {
+    /// Rows whose value Left/Right can change in place.
+    fn is_choice(self) -> bool {
+        matches!(self, Self::Prompts | Self::SwapConfirm | Self::Fullscreen | Self::ReduceMotion | Self::Clock | Self::Autostart)
+    }
+}
+
+/// One settings row: (row, section, label, value, help).
+pub struct SettingInfo(pub SettingRow, pub &'static str, pub &'static str, pub String, pub &'static str);
+
+/// Starting point for a user `emulators.toml`.
+const EMULATORS_TEMPLATE: &str = "# Your additions to the built-in emulator list. Changes show up after the next scan.\n\
+# Folders to look for ROMs in (one sub-folder per system, e.g. roms/snes):\n\
+rom_dirs = [\"{home}/ROMs\"]\n\n\
+# Replace a built-in system, or add one:\n\
+# [[system]]\n\
+# id = \"snes\"\n\
+# name = \"Super Nintendo\"\n\
+# folders = [\"snes\", \"sfc\"]\n\
+# extensions = [\"sfc\", \"smc\", \"zip\"]\n\
+# emulators = [{ core = \"snes9x\" }, { program = \"snes9x-gtk\" }]\n";
 
 /// System menu (Guide button) entries. Which ones show comes from `App::menu_items`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +185,7 @@ pub enum MenuItem {
     Resume,
     CloseGame,
     Library,
+    Search,
     Settings,
     Sleep,
     Restart,
@@ -195,7 +253,10 @@ pub struct App {
     ambient_to: (Color, Color),
     ambient_t: Blend,
 
+    /// Glyphs to show: the last thing used (keyboard/mouse, or the controller's kind).
     pub pad: PadKind,
+    /// Kind of the connected controller.
+    controller: PadKind,
     held: Option<Held>,
     last_frame: Option<Instant>,
     pub scale: f32,
@@ -319,6 +380,7 @@ impl App {
             ambient_to: (theme::NIGHT, theme::DUSK),
             ambient_t: Blend::new(1.0),
             pad: PadKind::Keyboard,
+            controller: PadKind::Xbox,
             held: None,
             last_frame: None,
             scale: 900.0 / theme::DESIGN_HEIGHT,
@@ -366,7 +428,12 @@ impl App {
     }
 
     /// Replace the library, keeping focus on the same game if it still exists.
-    fn set_library(&mut self, games: Vec<Game>) {
+    fn set_library(&mut self, mut games: Vec<Game>) {
+        let off = &self.config.disabled_sources;
+        if !off.is_empty() {
+            let on = |s: library::Source| !off.iter().any(|d| d == s.as_str());
+            games.retain(|g| on(g.source) || g.also_on.iter().any(|&s| on(s)));
+        }
         let keep = self.games.get(self.selected).map(|g| g.id.clone());
         let keep_row = self.shelves.get(self.row).map(|s| s.title);
         self.games = games;
@@ -570,16 +637,41 @@ impl App {
 
     fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Pad(PadEvent::Connected(kind)) => self.pad = kind,
+            Message::Pad(PadEvent::Connected(kind)) => {
+                self.controller = kind;
+                self.pad = kind;
+            }
             Message::Pad(PadEvent::Disconnected) => self.pad = PadKind::Keyboard,
             Message::Pad(PadEvent::Press(a)) => {
                 if !self.window_focused && a != Action::Guide {
                     return Task::none();
                 }
-                self.press(a);
+                // Whatever was used last decides the prompts.
+                self.pad = self.controller;
+                self.press(self.swapped(a));
                 return self.prewarm();
             }
-            Message::Pad(PadEvent::Release(a)) => self.release(a),
+            Message::Pad(PadEvent::Release(a)) => self.release(self.swapped(a)),
+            Message::Act(a) => {
+                self.act(a);
+                return self.prewarm();
+            }
+            Message::Point(t) => {
+                self.pad = PadKind::Keyboard;
+                self.point(t);
+                return self.prewarm();
+            }
+            Message::Wheel(dy) => {
+                self.pad = PadKind::Keyboard;
+                if self.screen != Screen::Typing {
+                    self.act(if dy > 0.0 { Action::Up } else { Action::Down });
+                }
+                return self.prewarm();
+            }
+            Message::RightClick => {
+                self.pad = PadKind::Keyboard;
+                self.act(Action::Back);
+            }
             Message::Key(a, true) => {
                 self.pad = PadKind::Keyboard;
                 self.press(a);
@@ -587,6 +679,9 @@ impl App {
             }
             Message::Key(a, false) => self.release(a),
             Message::RawKey(key, text, pressed) => {
+                if pressed {
+                    self.pad = PadKind::Keyboard;
+                }
                 if pressed && self.typing() && !self.overlay && self.type_key(&key, text.as_deref()) {
                     self.pad = PadKind::Keyboard;
                     return Task::none();
@@ -756,7 +851,8 @@ impl App {
     }
 
     fn act(&mut self, a: Action) {
-        if a == Action::Guide {
+        // Guide anywhere, and Menu (Start) except while typing, where Start means "done".
+        if a == Action::Guide || (a == Action::Menu && !matches!(self.screen, Screen::Search | Screen::Typing)) {
             return self.toggle_menu();
         }
         if self.menu.is_some() {
@@ -783,10 +879,10 @@ impl App {
             Screen::Typing => return self.act_typing(a),
             Screen::Settings => return self.act_settings(a),
             Screen::Hidden => return self.act_hidden(a),
+            Screen::Sources => return self.act_sources(a),
         }
         match (self.focus, a) {
             (_, Action::Search) => self.open_search(),
-            (_, Action::Menu) => self.open_settings(),
             (Focus::Hero(_), Action::Left) => self.focus = Focus::Hero(0),
             (Focus::Hero(_), Action::Right) => self.focus = Focus::Hero(1),
             (Focus::Hero(_), Action::Down | Action::Back) => self.focus = Focus::Shelf,
@@ -801,7 +897,7 @@ impl App {
             (Focus::Shelf, Action::Right) => self.move_col(1),
             (Focus::Shelf, Action::PrevTab) => self.move_col(-5),
             (Focus::Shelf, Action::NextTab) => self.move_col(5),
-            (_, Action::Guide) => {}
+            (_, Action::Guide | Action::Menu) => {}
             (Focus::Shelf, Action::Confirm) => self.play(),
             (Focus::Shelf, Action::Details) => self.details(),
             (Focus::Shelf, Action::Back) => {
@@ -1273,69 +1369,256 @@ impl App {
         self.osk_pad(a);
     }
 
+    /// Confirm and Back trade places when the player asked for Nintendo-style buttons.
+    fn swapped(&self, a: Action) -> Action {
+        match (self.config.swap_confirm, a) {
+            (true, Action::Confirm) => Action::Back,
+            (true, Action::Back) => Action::Confirm,
+            _ => a,
+        }
+    }
+
+    /// The glyph to show for an action, following the last input and the prompt setting.
+    pub fn glyph(&self, a: Action) -> &'static str {
+        if self.pad == PadKind::Keyboard {
+            return PadKind::Keyboard.glyph(a);
+        }
+        let kind = PadKind::from_setting(&self.config.prompts).unwrap_or(self.pad);
+        kind.glyph(self.swapped(a))
+    }
+
+    /// A click: the first focuses, a click on what's already focused activates it.
+    fn point(&mut self, t: Target) {
+        let again = match t {
+            Target::Menu(i) => {
+                self.menu = Some(i);
+                true
+            }
+            Target::Card(r, c) => {
+                let same = self.screen == Screen::Home && self.focus == Focus::Shelf && self.row == r && self.cols.get(r) == Some(&c);
+                if r < self.cols.len() {
+                    self.focus = Focus::Shelf;
+                    self.row = r;
+                    self.cols[r] = c;
+                    self.sync_focus();
+                }
+                same
+            }
+            Target::Hero(i) => {
+                self.focus = Focus::Hero(i);
+                self.sync_focus();
+                true
+            }
+            Target::Row(i) => {
+                self.list_focus = i;
+                true
+            }
+            Target::Page(i) => {
+                self.page_focus = i;
+                true
+            }
+            Target::Result(i) => {
+                let same = self.on_results && self.result_col == i;
+                self.on_results = true;
+                self.result_col = i;
+                same
+            }
+        };
+        if again {
+            self.act(Action::Confirm);
+        }
+    }
+
     fn open_settings(&mut self) {
         self.screen = Screen::Settings;
         self.list_focus = 0;
     }
 
-    pub fn settings_rows(&self) -> Vec<(SettingRow, &'static str, String)> {
+    /// Every setting: (row, section, label, current value, what it does). Order = screen order.
+    pub fn settings_rows(&self) -> Vec<SettingInfo> {
+        let on = |b: bool| if b { "On".to_owned() } else { "Off".to_owned() };
         let key = match &self.config.steamgriddb_api_key {
             Some(k) if k.len() > 4 => format!("Set, ending {}", &k[k.len() - 4..]),
             Some(_) => "Set".into(),
-            None => "Not set. Needed for art of non-Steam games".into(),
+            None => "Not set".into(),
         };
         let hidden = self.store.as_ref().and_then(|s| s.load().ok()).map_or(0, |r| r.iter().filter(|r| r.hidden).count());
+        let off = self.config.disabled_sources.len();
+        let prompts = match self.config.prompts.as_str() {
+            "xbox" => "Xbox",
+            "playstation" => "PlayStation",
+            "nintendo" => "Nintendo",
+            _ => "Match my controller",
+        };
+        use SettingRow::*;
         vec![
-            (SettingRow::ApiKey, "SteamGridDB API key", key),
-            (SettingRow::ReduceMotion, "Reduce motion", if self.reduce_motion { "On".into() } else { "Off".into() }),
-            (SettingRow::Autostart, "Start with your computer", if self.autostart { "On".into() } else { "Off".into() }),
-            (SettingRow::Rescan, "Look for new games", if self.scanning { "Looking…".into() } else { "Checks every launcher now".into() }),
-            (SettingRow::Hidden, "Hidden games", if hidden == 0 { "None".into() } else { format!("{hidden}") }),
+            SettingInfo(Rescan, "Library", "Look for new games", if self.scanning { "Looking…".into() } else { String::new() }, "Checks every launcher for games added or removed. This also happens on its own every minute."),
+            SettingInfo(Sources, "Library", "Game sources", if off == 0 { "All on".into() } else { format!("{off} off") }, "Choose which launchers and stores show up in your library."),
+            SettingInfo(Hidden, "Library", "Hidden games", if hidden == 0 { "None".into() } else { hidden.to_string() }, "Games you hid from the game page. Pick one to bring it back."),
+            SettingInfo(GamesFile, "Library", "Add games by hand", String::new(), "Opens your games list (games.toml) in a text editor, for games no launcher knows about."),
+            SettingInfo(EmulatorsFile, "Library", "Emulator settings", String::new(), "Opens emulators.toml: where your ROMs live and which emulator runs each system."),
+            SettingInfo(Prompts, "Controls", "Button prompts", prompts.into(), "Which button pictures to show when you use a controller."),
+            SettingInfo(SwapConfirm, "Controls", "Confirm with the right button", on(self.config.swap_confirm), "Nintendo style: the right face button selects and the bottom one goes back."),
+            SettingInfo(Fullscreen, "Display", "Full screen", on(self.config.fullscreen), "Fill the whole screen, now and every time it starts."),
+            SettingInfo(ReduceMotion, "Display", "Reduce motion", on(self.reduce_motion), "Moves focus instantly instead of animating."),
+            SettingInfo(Clock, "Display", "Clock", if self.config.clock_12h { "12-hour".into() } else { "24-hour".into() }, "How the time is shown."),
+            SettingInfo(ApiKey, "Art", "SteamGridDB API key", key, "Needed for covers of games that aren't on Steam. Get a free key at steamgriddb.com, under Preferences > API."),
+            SettingInfo(Autostart, "System", "Start with your computer", on(self.autostart), "Opens Superman full screen when you log in."),
+            SettingInfo(About, "System", "About", format!("Version {}", env!("CARGO_PKG_VERSION")), "Select to open the folder with your settings and games list."),
         ]
     }
 
     fn act_settings(&mut self, a: Action) {
         let rows = self.settings_rows();
+        let row = rows[self.list_focus.min(rows.len() - 1)].0;
         match a {
             Action::Up => self.list_focus = self.list_focus.saturating_sub(1),
             Action::Down => self.list_focus = (self.list_focus + 1).min(rows.len() - 1),
-            Action::Back | Action::Menu => {
+            Action::Back => {
                 self.screen = Screen::Home;
                 self.sync_focus();
             }
-            Action::Confirm => match rows[self.list_focus].0 {
-                SettingRow::ApiKey => {
-                    self.typing_for = TypingFor::ApiKey;
-                    let cur = self.config.steamgriddb_api_key.clone().unwrap_or_default();
-                    self.osk = osk::Osk::new(&cur, true);
-                    self.screen = Screen::Typing;
+            // Left/Right change values in place; Confirm does too, or opens the row.
+            Action::Left | Action::Right | Action::Confirm => {
+                let step = if a == Action::Left { -1 } else { 1 };
+                if a != Action::Confirm && !row.is_choice() {
+                    return;
                 }
-                SettingRow::ReduceMotion => {
-                    let on = !self.reduce_motion;
-                    self.reduce_motion = on;
-                    if let Err(e) = config::update(|c| c.reduce_motion = on) {
-                        self.notice(&format!("Couldn't save settings: {e}"));
-                    }
-                }
-                SettingRow::Autostart => {
-                    let on = !self.autostart;
-                    match autostart::set(on) {
-                        Ok(()) => self.autostart = on,
-                        Err(e) => self.notice(&format!("Couldn't change it: {e}")),
-                    }
-                }
-                SettingRow::Rescan => {
-                    let t = self.rescan();
-                    self.pending.push(t);
-                }
-                SettingRow::Hidden => {
-                    self.load_hidden();
-                    self.screen = Screen::Hidden;
-                    self.list_focus = 0;
-                }
-            },
+                self.change_setting(row, step);
+            }
             _ => {}
         }
+    }
+
+    fn save_config(&mut self, change: impl Fn(&mut config::Config)) {
+        change(&mut self.config);
+        if let Err(e) = config::update(|c| change(c)) {
+            self.notice(&format!("Couldn't save settings: {e}"));
+        }
+    }
+
+    fn change_setting(&mut self, row: SettingRow, step: i32) {
+        match row {
+            SettingRow::ApiKey => {
+                self.typing_for = TypingFor::ApiKey;
+                let cur = self.config.steamgriddb_api_key.clone().unwrap_or_default();
+                self.osk = osk::Osk::new(&cur, true);
+                self.screen = Screen::Typing;
+            }
+            SettingRow::ReduceMotion => {
+                let on = !self.reduce_motion;
+                self.reduce_motion = on;
+                self.save_config(move |c| c.reduce_motion = on);
+            }
+            SettingRow::Prompts => {
+                const ORDER: [&str; 4] = ["", "xbox", "playstation", "nintendo"];
+                let i = ORDER.iter().position(|p| *p == self.config.prompts).unwrap_or(0) as i32;
+                let next = ORDER[(i + step).rem_euclid(ORDER.len() as i32) as usize];
+                self.save_config(move |c| c.prompts = next.to_owned());
+            }
+            SettingRow::SwapConfirm => {
+                let on = !self.config.swap_confirm;
+                self.save_config(move |c| c.swap_confirm = on);
+            }
+            SettingRow::Fullscreen => {
+                let on = !self.config.fullscreen;
+                self.save_config(move |c| c.fullscreen = on);
+                let mode = if on { window::Mode::Fullscreen } else { window::Mode::Windowed };
+                self.pending.push(window::latest().and_then(move |id| window::set_mode(id, mode)));
+            }
+            SettingRow::Clock => {
+                let on = !self.config.clock_12h;
+                self.save_config(move |c| c.clock_12h = on);
+            }
+            SettingRow::Autostart => {
+                let on = !self.autostart;
+                match autostart::set(on) {
+                    Ok(()) => self.autostart = on,
+                    Err(e) => self.notice(&format!("Couldn't change it: {e}")),
+                }
+            }
+            SettingRow::Rescan => {
+                let t = self.rescan();
+                self.pending.push(t);
+            }
+            SettingRow::Sources => {
+                self.screen = Screen::Sources;
+                self.list_focus = 0;
+            }
+            SettingRow::Hidden => {
+                self.load_hidden();
+                self.screen = Screen::Hidden;
+                self.list_focus = 0;
+            }
+            SettingRow::GamesFile => self.open_file(&sources::manual::path(), include_str!("../games.example.toml")),
+            SettingRow::EmulatorsFile => self.open_file(&config::path().with_file_name("emulators.toml"), EMULATORS_TEMPLATE),
+            SettingRow::About => {
+                let dir = config::path().parent().map(|d| d.to_path_buf()).unwrap_or_default();
+                let _ = std::fs::create_dir_all(&dir);
+                self.open_path(&dir);
+            }
+        }
+    }
+
+    /// Open a settings file in the system's editor, creating it from `template` first.
+    fn open_file(&mut self, path: &std::path::Path, template: &str) {
+        if !path.exists() {
+            if let Some(d) = path.parent() {
+                let _ = std::fs::create_dir_all(d);
+            }
+            if let Err(e) = std::fs::write(path, template) {
+                return self.notice(&format!("Couldn't create {}: {e}", path.display()));
+            }
+        }
+        self.open_path(path);
+        self.notice("Opened in your editor. Changes show up after the next scan.");
+    }
+
+    fn open_path(&mut self, path: &std::path::Path) {
+        let sources::LaunchSpec::Command { program, args, .. } = sources::LaunchSpec::uri(path.to_string_lossy());
+        if let Err(e) = std::process::Command::new(&program).args(&args).spawn() {
+            self.notice(&format!("Couldn't open {}: {e}", path.display()));
+        }
+    }
+
+    /// Game sources screen: every source, on or off.
+    pub fn source_rows(&self) -> Vec<(library::Source, bool)> {
+        library::Source::ALL.iter().map(|&s| (s, !self.config.disabled_sources.iter().any(|d| d == s.as_str()))).collect()
+    }
+
+    fn act_sources(&mut self, a: Action) {
+        let rows = self.source_rows();
+        match a {
+            Action::Up => self.list_focus = self.list_focus.saturating_sub(1),
+            Action::Down => self.list_focus = (self.list_focus + 1).min(rows.len() - 1),
+            Action::Back => {
+                self.screen = Screen::Settings;
+                self.list_focus = self.settings_rows().iter().position(|r| r.0 == SettingRow::Sources).unwrap_or(0);
+            }
+            Action::Confirm | Action::Left | Action::Right => {
+                let (src, on) = rows[self.list_focus];
+                let id = src.as_str().to_owned();
+                self.save_config(move |c| {
+                    c.disabled_sources.retain(|d| *d != id);
+                    if on {
+                        c.disabled_sources.push(id.clone());
+                    }
+                });
+                // Reload from the cache so turned-on sources come back straight away.
+                if let Some(store) = &self.store {
+                    let games = library::from_rows(store.load().unwrap_or_default());
+                    self.set_library(games);
+                    let t = self.queue_art();
+                    self.pending.push(t);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The clock as the player likes it.
+    pub fn clock_text(&self) -> String {
+        self.clock.format(if self.config.clock_12h { "%-I:%M %p" } else { "%H:%M" }).to_string()
     }
 
     fn load_hidden(&mut self) {
@@ -1376,6 +1659,7 @@ impl App {
             v.push((MenuItem::CloseGame, format!("Close {}", s.title)));
         }
         v.push((MenuItem::Library, "Library".into()));
+        v.push((MenuItem::Search, "Search".into()));
         v.push((MenuItem::Settings, "Settings".into()));
         let armed = |m: MenuItem| self.menu_armed.is_some_and(|(a, t)| a == m && t.elapsed() < Duration::from_secs(3));
         v.push((MenuItem::Sleep, "Sleep".into()));
@@ -1433,6 +1717,11 @@ impl App {
                 self.set_overlay(false);
                 self.screen = Screen::Home;
                 self.sync_focus();
+            }
+            MenuItem::Search => {
+                close(self);
+                self.set_overlay(false);
+                self.open_search();
             }
             MenuItem::Settings => {
                 close(self);
@@ -1512,6 +1801,17 @@ impl App {
                 _ => None,
             }),
             instance::requests().map(Message::Remote),
+            iced::event::listen_with(|e, _, _| match e {
+                iced::Event::Mouse(iced::mouse::Event::WheelScrolled { delta }) => {
+                    let dy = match delta {
+                        iced::mouse::ScrollDelta::Lines { y, .. } => y,
+                        iced::mouse::ScrollDelta::Pixels { y, .. } => y / 40.0,
+                    };
+                    (dy.abs() >= 0.5).then_some(Message::Wheel(dy))
+                }
+                iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Right | iced::mouse::Button::Back)) => Some(Message::RightClick),
+                _ => None,
+            }),
             time::every(Duration::from_secs(10)).map(|_| Message::Tick),
             // Cheap: scanners only read a few local files.
             time::every(Duration::from_secs(45)).map(|_| Message::Rescan),
@@ -1532,6 +1832,7 @@ impl App {
             Screen::Typing => ui::search::typing(self),
             Screen::Settings => ui::settings::view(self),
             Screen::Hidden => ui::settings::hidden(self),
+            Screen::Sources => ui::settings::sources(self),
         };
         let mut layers = iced::widget::stack![base];
         if self.playing.get() > 0.005 {

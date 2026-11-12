@@ -60,6 +60,16 @@ impl PadKind {
         }
     }
 
+    /// The "Button prompts" setting; None = follow the controller.
+    pub fn from_setting(s: &str) -> Option<Self> {
+        Some(match s {
+            "xbox" => PadKind::Xbox,
+            "playstation" => PadKind::PlayStation,
+            "nintendo" => PadKind::Nintendo,
+            _ => return None,
+        })
+    }
+
     /// Label shown inside the glyph for an action.
     pub fn glyph(self, action: Action) -> &'static str {
         use Action::*;

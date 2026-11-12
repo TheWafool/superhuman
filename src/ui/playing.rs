@@ -102,8 +102,8 @@ fn curtain<'a>(t: f32) -> Element<'a, Message> {
 }
 
 fn hint<'a>(app: &App, a: Action, label: &'a str, t: f32) -> Element<'a, Message> {
-    let g = app.pad.glyph(a);
-    row![
+    let g = app.glyph(a);
+    let r = row![
         container(text(g).size(15).font(body(Weight::Bold)).color(alpha(PAPER, t)))
             .width(if g.chars().count() > 1 { 46.0 } else { 32.0 })
             .height(32)
@@ -117,6 +117,6 @@ fn hint<'a>(app: &App, a: Action, label: &'a str, t: f32) -> Element<'a, Message
         text(label).size(size::XS).color(alpha(PAPER, 0.8 * t)),
     ]
     .spacing(12)
-    .align_y(alignment::Vertical::Center)
-    .into()
+    .align_y(alignment::Vertical::Center);
+    super::home::clickable(r, Message::Act(a))
 }

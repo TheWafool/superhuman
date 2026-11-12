@@ -39,7 +39,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
 
     let mut buttons = row![].spacing(20);
     for (i, (_, label)) in app.page_buttons().into_iter().enumerate() {
-        buttons = buttons.push(hero_button(label, i == app.page_focus, 1.0));
+        buttons = buttons.push(super::home::clickable(hero_button(label, i == app.page_focus, 1.0), Message::Point(crate::Target::Page(i))));
     }
 
     let content = column![
@@ -101,7 +101,7 @@ pub fn matches(app: &App) -> Element<'_, Message> {
             // A window of rows around focus.
             let start = app.list_focus.saturating_sub(4).min(rows.len().saturating_sub(9));
             for (i, (name, year)) in rows.into_iter().enumerate().skip(start).take(9) {
-                list = list.push(list_row(name, year, i == app.list_focus));
+                list = list.push(super::home::clickable(list_row(name, year, i == app.list_focus), Message::Point(crate::Target::Row(i))));
             }
         }
     }
@@ -138,12 +138,12 @@ fn tile(slot: Slot) -> (f32, f32) {
 }
 
 pub fn art_picker<'a>(app: &'a App) -> Element<'a, Message> {
-    let mut tabs = row![glyph(app.pad.glyph(Action::PrevTab))].spacing(28).align_y(alignment::Vertical::Center);
+    let mut tabs = row![glyph(app.glyph(Action::PrevTab))].spacing(28).align_y(alignment::Vertical::Center);
     for s in Slot::ALL {
         let on = s == app.art_slot;
         tabs = tabs.push(text(s.label()).size(size::M).font(body(if on { Weight::Bold } else { Weight::Normal })).color(if on { PAPER } else { HAZE }));
     }
-    tabs = tabs.push(glyph(app.pad.glyph(Action::NextTab)));
+    tabs = tabs.push(glyph(app.glyph(Action::NextTab)));
 
     let head = column![text("Change art").size(size::XL).font(display(Weight::ExtraBold)), Space::new().height(20), tabs];
 
@@ -220,7 +220,7 @@ fn framed<'a>(inner: Option<Element<'a, Message>>, w: f32, h: f32, focused: bool
 pub(crate) fn screen<'a>(app: &'a App, content: Element<'a, Message>, hints: &[(Action, &'static str)]) -> Element<'a, Message> {
     let mut r = row![].spacing(36).align_y(alignment::Vertical::Center);
     for &(a, label) in hints {
-        r = r.push(row![glyph(app.pad.glyph(a)), text(label).size(size::XS).color(alpha(PAPER, 0.8))].spacing(12).align_y(alignment::Vertical::Center));
+        r = r.push(super::home::hint(app, a, label));
     }
     let footer = container(r).width(Fill).height(FOOTER_H).padding([0.0, MARGIN]).align_y(alignment::Vertical::Center);
     let wash = if app.screen == crate::Screen::Game { 0.0 } else { 0.6 };

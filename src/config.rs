@@ -13,6 +13,15 @@ pub struct Config {
     pub steamgriddb_api_key: Option<String>,
     /// Instant movement instead of animation.
     pub reduce_motion: bool,
+    /// Button prompts: "auto" (follow the controller), "xbox", "playstation", "nintendo".
+    pub prompts: String,
+    /// Confirm on the right face button and Back on the bottom one (Nintendo style).
+    pub swap_confirm: bool,
+    /// Start full screen.
+    pub fullscreen: bool,
+    pub clock_12h: bool,
+    /// Sources whose games are left out of the library (by `Source::as_str`).
+    pub disabled_sources: Vec<String>,
 }
 
 pub fn path() -> PathBuf {

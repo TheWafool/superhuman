@@ -117,7 +117,7 @@ pub(crate) fn top_bar(app: &App) -> Element<'_, Message> {
     container(
         row![
             text(pad).size(size::XS).color(HAZE),
-            text(app.clock.format("%H:%M").to_string()).size(size::S).font(body(Weight::Bold)),
+            text(app.clock_text()).size(size::S).font(body(Weight::Bold)),
         ]
         .spacing(28)
         .align_y(alignment::Vertical::Center),
@@ -141,8 +141,8 @@ fn hero(app: &App) -> Element<'_, Message> {
 
     let hero_f = app.hero_focus.get();
     let buttons = row![
-        hero_button(if running { "Now playing" } else { "Play" }, matches!(app.focus, Focus::Hero(0)), hero_f),
-        hero_button("Details", matches!(app.focus, Focus::Hero(1)), hero_f),
+        clickable(hero_button(if running { "Now playing" } else { "Play" }, matches!(app.focus, Focus::Hero(0)), hero_f), Message::Point(crate::Target::Hero(0))),
+        clickable(hero_button("Details", matches!(app.focus, Focus::Hero(1)), hero_f), Message::Point(crate::Target::Hero(1))),
     ]
     .spacing(20);
 
@@ -205,7 +205,7 @@ fn shelves(app: &App) -> Element<'_, Message> {
             if x + w > -cover::W && x < 4000.0 {
                 let top = y + LABEL_H + (COVER_BAND - h) / 2.0;
                 let dim = if row_active { 0.0 } else { 0.3 };
-                layers = layers.push(pin(cover_tile(app, gi, w, h, f, dim)).position(Point::new(x, top)));
+                layers = layers.push(pin(clickable(cover_tile(app, gi, w, h, f, dim), Message::Point(crate::Target::Card(r, c)))).position(Point::new(x, top)));
             }
             x += w + cover::GAP;
         }
@@ -290,11 +290,7 @@ fn footer(app: &App) -> Element<'_, Message> {
     };
     let mut r = row![].spacing(36).align_y(alignment::Vertical::Center);
     for &(a, label) in hints {
-        r = r.push(
-            row![glyph(app.pad.glyph(a)), text(label).size(size::XS).color(alpha(PAPER, 0.8))]
-                .spacing(12)
-                .align_y(alignment::Vertical::Center),
-        );
+        r = r.push(hint(app, a, label));
     }
     container(r)
         .width(Fill)
@@ -303,6 +299,19 @@ fn footer(app: &App) -> Element<'_, Message> {
         .align_y(alignment::Vertical::Center)
         .style(|_| container::Style { background: Some(alpha(NIGHT, FOOTER_DIM).into()), ..Default::default() })
         .into()
+}
+
+/// A button prompt: glyph and label. Clicking it does what the button does.
+pub(crate) fn hint<'a>(app: &App, a: Action, label: &'a str) -> Element<'a, Message> {
+    clickable(
+        row![glyph(app.glyph(a)), text(label).size(size::XS).color(alpha(PAPER, 0.8))].spacing(12).align_y(alignment::Vertical::Center),
+        Message::Act(a),
+    )
+}
+
+/// Make anything clickable, with a pointer cursor.
+pub(crate) fn clickable<'a>(e: impl Into<Element<'a, Message>>, msg: Message) -> Element<'a, Message> {
+    iced::widget::mouse_area(e).on_press(msg).interaction(iced::mouse::Interaction::Pointer).into()
 }
 
 pub(crate) fn glyph(label: &str) -> Element<'_, Message> {

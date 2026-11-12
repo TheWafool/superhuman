@@ -4,9 +4,9 @@
 use iced::border::Border;
 use iced::font::Weight;
 use iced::widget::{Space, column, container, row, stack, text};
-use iced::{Element, Fill, Shadow, Vector, alignment};
+use iced::{Element, Fill, Shadow, Vector};
 
-use super::home::glyph;
+use super::home::hint;
 use crate::input::Action;
 use crate::theme::{DUSK, HAZE, MARQUEE, NIGHT, PAPER, alpha, body, display, size};
 use crate::{App, MenuItem, Message};
@@ -17,7 +17,7 @@ const PAD: f32 = 56.0;
 fn group(m: MenuItem) -> u8 {
     match m {
         MenuItem::Resume | MenuItem::CloseGame => 0,
-        MenuItem::Library | MenuItem::Settings => 1,
+        MenuItem::Library | MenuItem::Search | MenuItem::Settings => 1,
         _ => 2,
     }
 }
@@ -25,7 +25,7 @@ fn group(m: MenuItem) -> u8 {
 pub fn view(app: &App) -> Element<'_, Message> {
     let focus = app.menu.unwrap_or(0);
 
-    let mut head = column![text(app.clock.format("%H:%M").to_string()).size(size::XL).font(display(Weight::ExtraBold)).line_height(1.0)].spacing(10);
+    let mut head = column![text(app.clock_text()).size(size::XL).font(display(Weight::ExtraBold)).line_height(1.0)].spacing(10);
     let sub = match &app.session {
         Some(s) => format!("Playing {}", s.title),
         None => app.clock.format("%A %-d %B").to_string(),
@@ -40,11 +40,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
         }
         last = Some(group(item));
         let danger = app.menu_armed.is_some_and(|(m, _)| m == item);
-        list = list.push(entry(label, i == focus, danger));
+        list = list.push(super::home::clickable(entry(label, i == focus, danger), Message::Point(crate::Target::Menu(i))));
     }
 
-    let hint = |a: Action, l: &'static str| row![glyph(app.pad.glyph(a)), text(l).size(size::XS).color(alpha(PAPER, 0.8))].spacing(12).align_y(alignment::Vertical::Center);
-    let hints = row![hint(Action::Confirm, "Select"), hint(Action::Back, "Close")].spacing(36);
+    let hints = row![hint(app, Action::Confirm, "Select"), hint(app, Action::Back, "Close")].spacing(36);
 
     let panel = container(column![head, Space::new().height(56), list, Space::new().height(Fill), hints].padding(PAD))
         .width(PANEL_W)
@@ -56,6 +55,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
             ..Default::default()
         });
     let scrim = container(Space::new()).width(Fill).height(Fill).style(|_| container::Style { background: Some(alpha(NIGHT, 0.55).into()), ..Default::default() });
+    // Clicking outside the panel closes the menu.
+    let scrim = super::home::clickable(scrim, Message::Act(Action::Back));
     stack![scrim, row![panel, Space::new().width(Fill)]].into()
 }
 

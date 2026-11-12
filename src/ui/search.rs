@@ -30,12 +30,12 @@ const HINTS: &[(Action, &str)] = &[
 ];
 
 pub fn view(app: &App) -> Element<'_, Message> {
-    let mut tabs = row![glyph(app.pad.glyph(Action::PrevTab))].spacing(28).align_y(alignment::Vertical::Center);
+    let mut tabs = row![glyph(app.glyph(Action::PrevTab))].spacing(28).align_y(alignment::Vertical::Center);
     for i in app.filters() {
         let on = i == app.filter;
         tabs = tabs.push(text(FILTERS[i].label).size(size::S).font(body(if on { Weight::Bold } else { Weight::Normal })).color(if on { PAPER } else { HAZE }));
     }
-    tabs = tabs.push(glyph(app.pad.glyph(Action::NextTab)));
+    tabs = tabs.push(glyph(app.glyph(Action::NextTab)));
 
     let count = match app.results.len() {
         0 => "No games match".to_owned(),
@@ -93,7 +93,7 @@ fn results(app: &App) -> Element<'_, Message> {
         let f = if app.on_results && i == app.result_col { 1.0 } else { 0.0 };
         let s = 1.0 + 0.1 * f;
         let (w, h) = (RESULT_W * s, RESULT_H * s);
-        tiles.push(pin(cover_tile(app, gi, w, h, f, if app.on_results { 0.0 } else { 0.25 })).position(Point::new(x - (w - RESULT_W) / 2.0, (RESULT_H * 1.1 - h) / 2.0)).into());
+        tiles.push(pin(super::home::clickable(cover_tile(app, gi, w, h, f, if app.on_results { 0.0 } else { 0.25 }), Message::Point(crate::Target::Result(i)))).position(Point::new(x - (w - RESULT_W) / 2.0, (RESULT_H * 1.1 - h) / 2.0)).into());
     }
     iced::widget::Stack::with_children(tiles).width(Fill).height(Fill).into()
 }

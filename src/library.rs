@@ -31,6 +31,13 @@ pub enum Source {
 }
 
 impl Source {
+    /// Every source, in the order the settings list them.
+    pub const ALL: &[Source] = &[
+        Source::Steam, Source::Heroic, Source::Lutris, Source::Epic, Source::Gog, Source::Xbox, Source::Ubisoft, Source::Ea,
+        Source::BattleNet, Source::Amazon, Source::Itch, Source::Bottles, Source::Prism, Source::Emulation, Source::Manual,
+        Source::Flatpak, Source::Desktop,
+    ];
+
     /// Which copy wins when the same game is found in several places (lower = preferred).
     fn priority(self) -> u8 {
         match self {
