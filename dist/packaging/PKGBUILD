@@ -5,6 +5,7 @@ pkgrel=1
 pkgdesc='Controller-first game launcher for Steam, Heroic, Lutris, itch, emulators and more'
 arch=(x86_64 aarch64)
 license=(GPL-3.0-or-later)
+url="https://github.com/TheWafool/superhuman"
 depends=(gcc-libs libxkbcommon vulkan-icd-loader)
 makedepends=(cargo)
 optdepends=('gamescope: session mode' 'umu-launcher: run Windows games with Proton')
