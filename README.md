@@ -4,13 +4,13 @@
 
 A game launcher made for the couch and a controller. It finds the games you already have, from every launcher and store, and puts them on one shelf with proper art. Pick one and play, without ever seeing a desktop.
 
-![Library](docs/screenshots/home.png)
+![Library](docs/screenshots/home-2.png)
 
 | Game page | Search |
 |---|---|
-| ![Game page](docs/screenshots/details.png) | ![Search](docs/screenshots/search.png) |
+| ![Game page](docs/screenshots/details-2.png) | ![Search](docs/screenshots/search-2.png) |
 | **Menu** | **Settings** |
-| ![Menu](docs/screenshots/menu.png) | ![Settings](docs/screenshots/settings.png) |
+| ![Menu](docs/screenshots/menu-2.png) | ![Settings](docs/screenshots/settings-2.png) |
 
 Works on Linux. Windows and macOS builds exist but are still untested.
 
