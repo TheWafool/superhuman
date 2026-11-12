@@ -59,6 +59,7 @@ fn parse(k: &str) -> Option<Action> {
         "x" => Action::Details,
         "y" => Action::Search,
         "m" => Action::Menu,
+        "g" => Action::Guide,
         "lb" => Action::PrevTab,
         "rb" => Action::NextTab,
         _ => return None,

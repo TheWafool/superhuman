@@ -1,12 +1,15 @@
 mod anim;
 mod art;
+mod autostart;
 mod config;
 mod devtools;
 mod input;
+mod instance;
 mod launch;
 mod library;
 mod meta;
 mod osk;
+mod power;
 mod sources;
 mod store;
 mod theme;
@@ -25,7 +28,11 @@ use input::{Action, PadEvent, PadKind};
 use library::{Game, Shelf};
 
 fn main() -> iced::Result {
-    let fullscreen = std::env::args().any(|a| a == "--fullscreen");
+    // A copy is already running: hand it our request (focus, or --launch <id>) and stop.
+    if instance::claim(&instance::Remote::from_args()) {
+        return Ok(());
+    }
+    let fullscreen = std::env::args().any(|a| a == "--fullscreen" || a == "--session");
     let mut app = iced::application(App::new, App::update, App::view)
         .title("Superman")
         .subscription(App::subscription)
@@ -63,6 +70,10 @@ pub enum Message {
     Candidates(String, Vec<art::Candidate>),
     Choices(String, art::Slot, Vec<art::Choice>),
     Thumb(String, Option<PathBuf>),
+    /// Our window gained or lost focus (a game took it).
+    WindowFocus(bool),
+    /// A request from a second copy of the app.
+    Remote(instance::Remote),
     DevShoot,
     DevShot(window::Screenshot),
 }
@@ -96,8 +107,23 @@ pub enum TypingFor {
 pub enum SettingRow {
     ApiKey,
     ReduceMotion,
+    Autostart,
     Rescan,
     Hidden,
+}
+
+/// System menu (Guide button) entries. Which ones show comes from `App::menu_items`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuItem {
+    Resume,
+    CloseGame,
+    Library,
+    Settings,
+    Sleep,
+    Restart,
+    ShutDown,
+    /// Session mode: leave for the desktop. Desktop mode: quit the app.
+    Leave,
 }
 
 /// Game page buttons, in order. Labels come from `App::page_buttons`.
@@ -206,6 +232,17 @@ pub struct App {
     /// Name searched on the match screen.
     pub match_term: String,
     pub hidden: Vec<store::Row>,
+
+    /// False while a game (or anything else) has focus: pad input other than Guide is ignored,
+    /// so buttons pressed in a game never act on the launcher.
+    window_focused: bool,
+    /// Started with `--session` (the launcher is the whole session, e.g. under gamescope).
+    pub session_mode: bool,
+    /// System menu: focused row when open.
+    pub menu: Option<usize>,
+    /// Restart / shut down wait for a second press.
+    pub menu_armed: Option<(MenuItem, Instant)>,
+    pub autostart: bool,
 }
 
 impl App {
@@ -214,6 +251,9 @@ impl App {
         let scan = app.rescan();
         let art = app.queue_art();
         let warm = app.prewarm();
+        if let instance::Remote::Launch(id) = instance::Remote::from_args() {
+            app.launch_id(&id);
+        }
         (app, Task::batch([scan, art, warm, devtools::boot()]))
     }
 
@@ -301,6 +341,11 @@ impl App {
             page_return: Screen::Home,
             match_term: String::new(),
             hidden: Vec::new(),
+            window_focused: true,
+            session_mode: std::env::args().any(|a| a == "--session"),
+            menu: None,
+            menu_armed: None,
+            autostart: autostart::enabled(),
             games: Vec::new(),
             shelves: Vec::new(),
         };
@@ -518,6 +563,9 @@ impl App {
             Message::Pad(PadEvent::Connected(kind)) => self.pad = kind,
             Message::Pad(PadEvent::Disconnected) => self.pad = PadKind::Keyboard,
             Message::Pad(PadEvent::Press(a)) => {
+                if !self.window_focused && a != Action::Guide {
+                    return Task::none();
+                }
                 self.press(a);
                 return self.prewarm();
             }
@@ -625,6 +673,19 @@ impl App {
                     self.thumbs.insert(url, p);
                 }
             }
+            Message::WindowFocus(on) => {
+                self.window_focused = on;
+                if !on {
+                    // Don't keep scrolling a held direction into the background.
+                    self.held = None;
+                }
+            }
+            Message::Remote(r) => {
+                if let instance::Remote::Launch(id) = &r {
+                    self.launch_id(id);
+                }
+                return window::latest().and_then(|id| Task::batch([window::minimize(id, false), window::gain_focus(id)]));
+            }
             Message::DevShoot => return devtools::shoot(),
             Message::DevShot(s) => return devtools::save(s),
             Message::Resized(logical) => {
@@ -685,6 +746,12 @@ impl App {
     }
 
     fn act(&mut self, a: Action) {
+        if a == Action::Guide {
+            return self.toggle_menu();
+        }
+        if self.menu.is_some() {
+            return self.act_menu(a);
+        }
         let rows = self.shelves.len();
         if rows == 0 {
             return;
@@ -724,6 +791,7 @@ impl App {
             (Focus::Shelf, Action::Right) => self.move_col(1),
             (Focus::Shelf, Action::PrevTab) => self.move_col(-5),
             (Focus::Shelf, Action::NextTab) => self.move_col(5),
+            (_, Action::Guide) => {}
             (Focus::Shelf, Action::Confirm) => self.play(),
             (Focus::Shelf, Action::Details) => self.details(),
             (Focus::Shelf, Action::Back) => {
@@ -1210,6 +1278,7 @@ impl App {
         vec![
             (SettingRow::ApiKey, "SteamGridDB API key", key),
             (SettingRow::ReduceMotion, "Reduce motion", if self.reduce_motion { "On".into() } else { "Off".into() }),
+            (SettingRow::Autostart, "Start with your computer", if self.autostart { "On".into() } else { "Off".into() }),
             (SettingRow::Rescan, "Look for new games", if self.scanning { "Looking…".into() } else { "Checks every launcher now".into() }),
             (SettingRow::Hidden, "Hidden games", if hidden == 0 { "None".into() } else { format!("{hidden}") }),
         ]
@@ -1238,6 +1307,13 @@ impl App {
                         self.notice(&format!("Couldn't save settings: {e}"));
                     }
                 }
+                SettingRow::Autostart => {
+                    let on = !self.autostart;
+                    match autostart::set(on) {
+                        Ok(()) => self.autostart = on,
+                        Err(e) => self.notice(&format!("Couldn't change it: {e}")),
+                    }
+                }
                 SettingRow::Rescan => {
                     let t = self.rescan();
                     self.pending.push(t);
@@ -1263,7 +1339,7 @@ impl App {
             Action::Down => self.list_focus = (self.list_focus + 1).min(self.hidden.len().saturating_sub(1)),
             Action::Back => {
                 self.screen = Screen::Settings;
-                self.list_focus = 3;
+                self.list_focus = self.settings_rows().iter().position(|r| r.0 == SettingRow::Hidden).unwrap_or(0);
             }
             Action::Confirm => {
                 let Some(r) = self.hidden.get(self.list_focus) else { return };
@@ -1280,6 +1356,117 @@ impl App {
                 self.pending.push(t);
             }
             _ => {}
+        }
+    }
+
+    pub fn menu_items(&self) -> Vec<(MenuItem, String)> {
+        let mut v = Vec::new();
+        if let Some(s) = &self.session {
+            v.push((MenuItem::Resume, format!("Resume {}", s.title)));
+            v.push((MenuItem::CloseGame, format!("Close {}", s.title)));
+        }
+        v.push((MenuItem::Library, "Library".into()));
+        v.push((MenuItem::Settings, "Settings".into()));
+        let armed = |m: MenuItem| self.menu_armed.is_some_and(|(a, t)| a == m && t.elapsed() < Duration::from_secs(3));
+        v.push((MenuItem::Sleep, "Sleep".into()));
+        v.push((MenuItem::Restart, if armed(MenuItem::Restart) { "Press again to restart".into() } else { "Restart".into() }));
+        v.push((MenuItem::ShutDown, if armed(MenuItem::ShutDown) { "Press again to shut down".into() } else { "Shut down".into() }));
+        v.push((MenuItem::Leave, if self.session_mode { "Switch to desktop".into() } else { "Close Superman".into() }));
+        v
+    }
+
+    fn toggle_menu(&mut self) {
+        if self.menu.is_some() {
+            self.menu = None;
+            return;
+        }
+        self.menu = Some(0);
+        self.menu_armed = None;
+        self.held = None;
+        if !self.window_focused {
+            // Pressed in a game: come forward over it.
+            self.pending.push(window::latest().and_then(|id| Task::batch([window::minimize(id, false), window::gain_focus(id)])));
+            if self.session.is_some() {
+                self.set_overlay(true);
+            }
+        }
+    }
+
+    fn act_menu(&mut self, a: Action) {
+        let items = self.menu_items();
+        let Some(f) = self.menu else { return };
+        match a {
+            Action::Up => self.menu = Some(f.saturating_sub(1)),
+            Action::Down => self.menu = Some((f + 1).min(items.len() - 1)),
+            Action::Back | Action::Menu => self.menu = None,
+            Action::Confirm => self.menu_pick(items[f].0),
+            _ => {}
+        }
+    }
+
+    fn menu_pick(&mut self, item: MenuItem) {
+        let close = |app: &mut Self| app.menu = None;
+        match item {
+            MenuItem::Resume => {
+                close(self);
+                // Step aside so the game is in front again.
+                self.pending.push(window::latest().and_then(|id| window::minimize(id, true)));
+            }
+            MenuItem::CloseGame => {
+                close(self);
+                if let Some(s) = &mut self.session {
+                    s.stop();
+                }
+            }
+            MenuItem::Library => {
+                close(self);
+                self.set_overlay(false);
+                self.screen = Screen::Home;
+                self.sync_focus();
+            }
+            MenuItem::Settings => {
+                close(self);
+                self.set_overlay(false);
+                self.open_settings();
+            }
+            MenuItem::Sleep => {
+                close(self);
+                if let Err(e) = power::run(power::Power::Sleep) {
+                    self.notice(&format!("Couldn't sleep: {e}"));
+                }
+            }
+            MenuItem::Restart | MenuItem::ShutDown => {
+                if !self.menu_armed.is_some_and(|(m, t)| m == item && t.elapsed() < Duration::from_secs(3)) {
+                    self.menu_armed = Some((item, Instant::now()));
+                    return;
+                }
+                close(self);
+                let p = if item == MenuItem::Restart { power::Power::Restart } else { power::Power::ShutDown };
+                if let Err(e) = power::run(p) {
+                    self.notice(&format!("Couldn't do that: {e}"));
+                }
+            }
+            MenuItem::Leave => {
+                if self.session_mode {
+                    if let Some(cmd) = power::desktop_command() {
+                        let _ = std::process::Command::new(&cmd[0]).args(&cmd[1..]).spawn();
+                    }
+                }
+                self.pending.push(iced::exit());
+            }
+        }
+    }
+
+    /// Start a game by any of its copies' ids (`superman --launch steam:367520`).
+    fn launch_id(&mut self, id: &str) {
+        let Some(gi) = self.games.iter().position(|g| g.id == id || g.copies.iter().any(|c| c == id)) else {
+            self.notice(&format!("No game with the id {id}"));
+            return;
+        };
+        self.screen = Screen::Home;
+        self.focus_game(gi);
+        if self.selected == gi {
+            self.play();
         }
     }
 
@@ -1309,6 +1496,12 @@ impl App {
                 _ => None,
             }),
             window::resize_events().map(|(_, s)| Message::Resized(s)),
+            window::events().filter_map(|(_, e)| match e {
+                window::Event::Focused => Some(Message::WindowFocus(true)),
+                window::Event::Unfocused => Some(Message::WindowFocus(false)),
+                _ => None,
+            }),
+            instance::requests().map(Message::Remote),
             time::every(Duration::from_secs(10)).map(|_| Message::Tick),
             // Cheap: scanners only read a few local files.
             time::every(Duration::from_secs(45)).map(|_| Message::Rescan),
@@ -1333,6 +1526,9 @@ impl App {
         let mut layers = iced::widget::stack![base];
         if self.playing.get() > 0.005 {
             layers = layers.push(ui::playing::view(self));
+        }
+        if self.menu.is_some() {
+            layers = layers.push(ui::menu::view(self));
         }
         if let Some((msg, _)) = &self.toast {
             layers = layers.push(ui::home::toast(msg));

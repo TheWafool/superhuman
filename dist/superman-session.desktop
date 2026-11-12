@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Superman
+Comment=Couch game launcher as the whole session
+Exec=superman-session
+Type=Application
+DesktopNames=gamescope

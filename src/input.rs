@@ -25,6 +25,8 @@ pub enum Action {
     Menu,
     PrevTab,
     NextTab,
+    /// Guide / PS / Home button: the system menu, even while a game is running.
+    Guide,
 }
 
 impl Action {
@@ -67,6 +69,8 @@ impl PadKind {
             (PadKind::Keyboard, Details) => "I",
             (PadKind::Keyboard, Search) => "/",
             (PadKind::Keyboard, Menu) => "M",
+            (PadKind::Keyboard, Guide) => "F1",
+            (PadKind::PlayStation, Guide) => "PS",
             (PadKind::PlayStation, Confirm) => "✕",
             (PadKind::PlayStation, Back) => "○",
             (PadKind::PlayStation, Details) => "□",
@@ -83,6 +87,7 @@ impl PadKind {
             (_, Menu) => "☰",
             (_, PrevTab) => "LB",
             (_, NextTab) => "RB",
+            (_, Guide) => "Home",
             _ => "",
         }
     }
@@ -107,7 +112,8 @@ fn map_button(b: Button) -> Option<Action> {
         Button::East => Action::Back,
         Button::West => Action::Details,
         Button::North => Action::Search,
-        Button::Start | Button::Mode => Action::Menu,
+        Button::Start => Action::Menu,
+        Button::Mode => Action::Guide,
         Button::LeftTrigger => Action::PrevTab,
         Button::RightTrigger => Action::NextTab,
         _ => return None,
@@ -214,6 +220,7 @@ pub fn map_key(key: &Key) -> Option<Action> {
         Key::Named(Named::Escape | Named::Backspace) => Action::Back,
         Key::Named(Named::PageUp) => Action::PrevTab,
         Key::Named(Named::PageDown) => Action::NextTab,
+        Key::Named(Named::F1 | Named::Home) => Action::Guide,
         Key::Character(c) => match c.as_str() {
             "i" => Action::Details,
             "/" => Action::Search,
