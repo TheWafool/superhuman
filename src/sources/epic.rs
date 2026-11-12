@@ -42,7 +42,13 @@ fn parse(text: &str) -> Option<Discovered> {
         source: Source::Epic,
         source_id: app.to_owned(),
         title: s("DisplayName")?.to_owned(),
-        launch: LaunchSpec::uri(format!("com.epicgames.launcher://apps/{ns}%3A{item}%3A{app}?action=launch&silent=true")),
+        launch: {
+            let l = LaunchSpec::uri(format!("com.epicgames.launcher://apps/{ns}%3A{item}%3A{app}?action=launch&silent=true"));
+            match s("InstallLocation") {
+                Some(d) => l.watching(d),
+                None => l,
+            }
+        },
         minutes_played: 0,
         last_played: None,
         steam_appid: None,

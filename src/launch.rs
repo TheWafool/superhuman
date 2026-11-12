@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::sources::{LaunchSpec, on_path};
+use crate::sources::{LaunchSpec, hidden, on_path};
 
 /// How long a watched game may take to appear (Steam may update or sync first).
 const WATCH_GRACE: Duration = Duration::from_secs(180);
@@ -27,6 +27,23 @@ pub fn watch_pattern(game_id: &str) -> Option<String> {
         "heroic" => id.split_once(':').map(|(_, app)| app.to_owned()),
         _ => None,
     }
+}
+
+/// How a game that runs outside our own process tree is recognised.
+#[derive(Debug, Clone, PartialEq)]
+enum Watch {
+    /// A word on its command line (Linux: Steam's reaper, Heroic's runners).
+    Cmd(String),
+    /// A process started from its install folder (Windows/macOS launchers).
+    Dir(PathBuf),
+}
+
+/// Pick how to follow this game. Linux has exact command-line patterns; elsewhere the install
+/// folder is the dependable sign (Steam's `AppId=` only exists on Linux).
+fn watch_for(game_id: &str, watch_dir: Option<&str>) -> Option<Watch> {
+    let pattern = watch_pattern(game_id).filter(|_| cfg!(target_os = "linux") || !game_id.starts_with("steam:"));
+    let dir = watch_dir.filter(|d| !d.is_empty()).map(|d| Watch::Dir(PathBuf::from(d)));
+    if cfg!(target_os = "linux") { pattern.map(Watch::Cmd).or(dir) } else { dir.or(pattern.map(Watch::Cmd)) }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,13 +71,13 @@ pub struct Session {
     job: isize,
     cgroup: Option<PathBuf>,
     exited: Arc<AtomicBool>,
-    watch: Option<String>,
+    watch: Option<Watch>,
     /// The player asked us to close it.
     pub stopped: bool,
 }
 
 pub fn start(game_id: &str, title: &str, spec: &LaunchSpec) -> Result<Session, String> {
-    let LaunchSpec::Command { program, args, env, cwd } = spec;
+    let LaunchSpec::Command { program, args, env, cwd, watch_dir } = spec;
     let scoped = on_path("systemd-run");
     let unit = scoped.then(|| unit_name(game_id));
     // Without systemd (Void, Alpine, Gentoo, macOS) the game gets its own process group instead,
@@ -110,7 +127,7 @@ pub fn start(game_id: &str, title: &str, spec: &LaunchSpec) -> Result<Session, S
         job,
         cgroup: None,
         exited,
-        watch: watch_pattern(game_id),
+        watch: watch_for(game_id, watch_dir.as_deref()),
         stopped: false,
     })
 }
@@ -126,7 +143,7 @@ impl Session {
     pub fn poll(&mut self) -> Status {
         let now = Instant::now();
         let scope_alive = self.scope_alive();
-        let watched = self.watch.as_deref().map(|p| !find(p).is_empty());
+        let watched = self.watch.as_ref().map(|w| !find(w).is_empty());
 
         let alive = match watched {
             // A watched game is judged only by the pattern: the scope may hold a whole Steam client.
@@ -250,27 +267,42 @@ mod job {
 fn terminate(pid: u32) {
     let pid = pid.to_string();
     let _ = if cfg!(windows) {
-        Command::new("taskkill").args(["/PID", &pid, "/T"]).status()
+        hidden("taskkill").args(["/PID", &pid, "/T"]).status()
     } else {
         Command::new("kill").args(["-TERM", &pid]).status()
     };
 }
 
-/// Pids whose command line contains `pattern` (excluding launcher hand-off commands).
-fn find(pattern: &str) -> Vec<u32> {
+/// Pids of the watched game (never the launcher client or us).
+fn find(w: &Watch) -> Vec<u32> {
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let me = std::process::id();
     let Ok(mut sys) = System::new() else { return Vec::new() };
-    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always));
+    let what = ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always).with_exe(UpdateKind::Always);
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, what);
     sys.processes()
         .iter()
         .filter(|(pid, _)| pid.as_u32() != me)
-        .filter(|(_, p)| {
-            let cmd = p.cmd().iter().map(|a| a.to_string_lossy()).collect::<Vec<_>>().join(" ");
-            matches_cmd(&format!("{cmd} "), pattern)
+        .filter(|(_, p)| match w {
+            Watch::Cmd(pattern) => {
+                let cmd = p.cmd().iter().map(|a| a.to_string_lossy()).collect::<Vec<_>>().join(" ");
+                matches_cmd(&format!("{cmd} "), pattern)
+            }
+            Watch::Dir(dir) => p.exe().is_some_and(|exe| in_dir(exe, dir)),
         })
         .map(|(pid, _)| pid.as_u32())
         .collect()
+}
+
+/// Is `exe` inside `dir`? Ignores case and slash style on Windows.
+fn in_dir(exe: &std::path::Path, dir: &std::path::Path) -> bool {
+    if cfg!(windows) {
+        let norm = |p: &std::path::Path| p.to_string_lossy().to_lowercase().replace('/', "\\").trim_end_matches('\\').to_owned();
+        let (e, d) = (norm(exe), norm(dir));
+        e.starts_with(&d) && e[d.len()..].starts_with('\\')
+    } else {
+        exe.starts_with(dir)
+    }
 }
 
 fn matches_cmd(cmd: &str, pattern: &str) -> bool {
@@ -295,5 +327,9 @@ mod tests {
         assert!(!matches_cmd("steam steam://rungameid/367520 ", "AppId=367520"));
         assert!(matches_cmd("legendary launch Fortnite --wine x ", "Fortnite"));
         assert!(!matches_cmd("heroic --no-gui heroic://launch/legendary/Fortnite ", "Fortnite"));
+        assert!(in_dir(std::path::Path::new("/g/steamapps/common/HK/hk"), std::path::Path::new("/g/steamapps/common/HK")));
+        assert!(!in_dir(std::path::Path::new("/g/steamapps/common/HK2/hk"), std::path::Path::new("/g/steamapps/common/HK")));
+        let w = watch_for("steam:1", Some("/x"));
+        assert_eq!(w, if cfg!(target_os = "linux") { Some(Watch::Cmd("AppId=1".into())) } else { Some(Watch::Dir("/x".into())) });
     }
 }

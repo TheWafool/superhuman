@@ -1,3 +1,6 @@
+// Release builds on Windows are a window app, not a console app (no black console behind it).
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod anim;
 mod art;
 mod autostart;
@@ -28,6 +31,13 @@ use input::{Action, PadEvent, PadKind};
 use library::{Game, Shelf};
 
 fn main() -> iced::Result {
+    // Apps opened from Finder get a bare PATH; add Homebrew's so emulators and tools are found.
+    #[cfg(target_os = "macos")]
+    {
+        let path = std::env::var("PATH").unwrap_or_default();
+        // SAFETY: first thing in main, before any other thread exists.
+        unsafe { std::env::set_var("PATH", format!("{path}:/opt/homebrew/bin:/usr/local/bin")) };
+    }
     // A copy is already running: hand it our request (focus, or --launch <id>) and stop.
     if instance::claim(&instance::Remote::from_args()) {
         return Ok(());

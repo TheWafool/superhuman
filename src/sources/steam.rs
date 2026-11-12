@@ -27,6 +27,9 @@ fn roots() -> Vec<Root> {
     if let Some(d) = dirs::data_dir() {
         candidates.push((d.join("Steam"), false));
     }
+    if let Some(p) = super::reg_value(r"HKCU\Software\Valve\Steam", "SteamPath") {
+        candidates.push((PathBuf::from(p), false));
+    }
     if cfg!(windows) {
         for var in ["ProgramFiles(x86)", "ProgramFiles"] {
             if let Some(p) = std::env::var_os(var) {
@@ -67,7 +70,7 @@ pub fn scan() -> Result<Vec<Discovered>, String> {
                     continue;
                 }
                 let Ok(text) = read(&e.path()) else { continue };
-                if let Some(d) = manifest(&root, &text, &stats) {
+                if let Some(d) = manifest(&root, &lib, &text, &stats) {
                     out.push(d);
                 }
             }
@@ -117,7 +120,7 @@ fn playtime(root: &Path) -> HashMap<u32, (u32, i64)> {
     out
 }
 
-fn manifest(root: &Root, text: &str, stats: &HashMap<u32, (u32, i64)>) -> Option<Discovered> {
+fn manifest(root: &Root, lib: &std::path::Path, text: &str, stats: &HashMap<u32, (u32, i64)>) -> Option<Discovered> {
     let n = vdf::parse_text(text);
     let app = n.get("AppState")?;
     let appid: u32 = app.str("appid")?.parse().ok()?;
@@ -133,7 +136,10 @@ fn manifest(root: &Root, text: &str, stats: &HashMap<u32, (u32, i64)>) -> Option
         source: Source::Steam,
         source_id: appid.to_string(),
         title,
-        launch: launch(root, appid as u64),
+        launch: match app.str("installdir") {
+            Some(d) => launch(root, appid as u64).watching(lib.join("steamapps/common").join(d).to_string_lossy()),
+            None => launch(root, appid as u64),
+        },
         minutes_played: mins,
         last_played: (last > 0).then_some(last),
         steam_appid: Some(appid),

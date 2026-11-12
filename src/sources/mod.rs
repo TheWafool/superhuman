@@ -30,12 +30,16 @@ pub enum LaunchSpec {
         env: Vec<(String, String)>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cwd: Option<String>,
+        /// The game's install folder: it counts as running while a process runs from here.
+        /// Lets us follow games started through a launcher link (Steam, Epic, Xbox…).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        watch_dir: Option<String>,
     },
 }
 
 impl LaunchSpec {
     pub fn cmd(program: impl Into<String>, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        LaunchSpec::Command { program: program.into(), args: args.into_iter().map(Into::into).collect(), env: Vec::new(), cwd: None }
+        LaunchSpec::Command { program: program.into(), args: args.into_iter().map(Into::into).collect(), env: Vec::new(), cwd: None, watch_dir: None }
     }
 
     pub fn with_env(mut self, k: impl Into<String>, v: impl Into<String>) -> Self {
@@ -50,11 +54,18 @@ impl LaunchSpec {
         self
     }
 
+    pub fn watching(mut self, dir: impl Into<String>) -> Self {
+        let LaunchSpec::Command { watch_dir, .. } = &mut self;
+        *watch_dir = Some(dir.into());
+        self
+    }
+
     /// Open a URI (`steam://…`, `heroic://…`) with whatever the system has registered for it.
     pub fn uri(uri: impl Into<String>) -> Self {
         let uri = uri.into();
         if cfg!(windows) {
-            Self::cmd("cmd", ["/C".to_owned(), "start".into(), String::new(), uri])
+            // Not `cmd /C start`: cmd would split the URI at `&`.
+            Self::cmd("rundll32", ["url.dll,FileProtocolHandler".to_owned(), uri])
         } else if cfg!(target_os = "macos") {
             Self::cmd("open", [uri])
         } else {
@@ -136,6 +147,34 @@ pub fn read(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// A helper command (reg, powershell, taskkill) that must not flash a console window on Windows.
+pub fn hidden(program: &str) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut c = std::process::Command::new(program);
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut c, 0x0800_0000); // CREATE_NO_WINDOW
+    c
+}
+
+/// One registry value (Windows), via `reg query`. None elsewhere.
+pub fn reg_value(key: &str, name: &str) -> Option<String> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let out = hidden("reg").args(["query", key, "/v", name]).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    reg_line_value(&text, name)
+}
+
+/// The value from a `    Name    REG_SZ    value` line.
+fn reg_line_value(text: &str, name: &str) -> Option<String> {
+    text.lines().find_map(|l| {
+        let t = l.trim_start();
+        let rest = t.strip_prefix(name)?.trim_start().strip_prefix("REG_")?;
+        Some(rest.split_once(char::is_whitespace)?.1.trim().to_owned())
+    })
+}
+
 /// Full path of `name` on PATH (`name.exe` on Windows).
 pub fn which(name: &str) -> Option<PathBuf> {
     let file = if cfg!(windows) && !name.ends_with(".exe") { format!("{name}.exe") } else { name.to_owned() };
@@ -202,5 +241,15 @@ pub fn launcher(program: &str, flatpak_id: &str, flatpak: bool, args: Vec<String
         LaunchSpec::cmd("flatpak", a)
     } else {
         LaunchSpec::cmd(which(program).map_or(program.to_owned(), |p| p.to_string_lossy().into_owned()), args)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn reg_values() {
+        let t = "\r\nHKEY_CURRENT_USER\\Software\\Valve\\Steam\r\n    SteamPath    REG_SZ    d:/program files/steam\r\n";
+        assert_eq!(super::reg_line_value(t, "SteamPath").as_deref(), Some("d:/program files/steam"));
+        assert_eq!(super::reg_line_value(t, "Steam"), None);
     }
 }

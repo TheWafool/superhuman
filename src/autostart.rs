@@ -2,7 +2,6 @@
 //! Linux: XDG autostart file. macOS: a LaunchAgent. Windows: the Run registry key.
 
 use std::path::PathBuf;
-use std::process::Command;
 
 const NAME: &str = "Superman";
 #[cfg(target_os = "macos")]
@@ -26,7 +25,7 @@ const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 
 pub fn enabled() -> bool {
     if cfg!(windows) {
-        return Command::new("reg").args(["query", RUN_KEY, "/v", NAME]).output().is_ok_and(|o| o.status.success());
+        return crate::sources::hidden("reg").args(["query", RUN_KEY, "/v", NAME]).output().is_ok_and(|o| o.status.success());
     }
     file().is_some_and(|f| f.is_file())
 }
@@ -37,7 +36,7 @@ pub fn set(on: bool) -> Result<(), String> {
         let cmd = format!("\"{exe}\" --fullscreen");
         let args: Vec<&str> =
             if on { vec!["add", RUN_KEY, "/v", NAME, "/d", &cmd, "/f"] } else { vec!["delete", RUN_KEY, "/v", NAME, "/f"] };
-        let ok = Command::new("reg").args(&args).output().map_err(|e| e.to_string())?.status.success();
+        let ok = crate::sources::hidden("reg").args(&args).output().map_err(|e| e.to_string())?.status.success();
         return if ok || !on { Ok(()) } else { Err("couldn't write the registry".into()) };
     }
     let f = file().ok_or("no config folder")?;

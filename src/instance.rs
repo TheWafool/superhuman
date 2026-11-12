@@ -43,8 +43,17 @@ static LISTENER: Mutex<Option<std::os::unix::net::UnixListener>> = Mutex::new(No
 #[cfg(not(unix))]
 static LISTENER: Mutex<Option<std::net::TcpListener>> = Mutex::new(None);
 /// Windows has no Unix sockets in std; a loopback port (taken exclusively) does the same job.
+/// Any local program can reach a port, so requests must carry a random token kept in the
+/// user's own (private) app-data folder.
 #[cfg(not(unix))]
 const ADDR: &str = "127.0.0.1:47619";
+#[cfg(not(unix))]
+static TOKEN: Mutex<String> = Mutex::new(String::new());
+
+#[cfg(not(unix))]
+fn token_file() -> std::path::PathBuf {
+    dirs::data_local_dir().unwrap_or_else(std::env::temp_dir).join("superman").join("instance.token")
+}
 
 #[cfg(unix)]
 fn socket() -> std::path::PathBuf {
@@ -86,13 +95,22 @@ pub fn claim(req: &Remote) -> bool {
     use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::time::Duration;
     let addr: SocketAddr = ADDR.parse().unwrap();
-    if let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
-        if s.write_all(req.encode().as_bytes()).is_ok() {
+    if let (Ok(mut s), Ok(token)) = (TcpStream::connect_timeout(&addr, Duration::from_millis(500)), std::fs::read_to_string(token_file())) {
+        if s.write_all(format!("{} {}", token.trim(), req.encode()).as_bytes()).is_ok() {
             return true;
         }
     }
     match TcpListener::bind(addr) {
-        Ok(l) => *LISTENER.lock().unwrap() = Some(l),
+        Ok(l) => {
+            use std::hash::{BuildHasher, Hasher};
+            let token = format!("{:016x}{:016x}", std::hash::RandomState::new().build_hasher().finish(), std::hash::RandomState::new().build_hasher().finish());
+            let f = token_file();
+            let _ = std::fs::create_dir_all(f.parent().unwrap());
+            if std::fs::write(&f, &token).is_ok() {
+                *TOKEN.lock().unwrap() = token;
+                *LISTENER.lock().unwrap() = Some(l);
+            }
+        }
         Err(e) => eprintln!("single instance: {ADDR}: {e}"),
     }
     false
@@ -126,7 +144,7 @@ pub fn requests() -> Subscription<Remote> {
                     for conn in l.incoming().flatten() {
                         let mut line = String::new();
                         if BufReader::new(conn.take(1024)).read_line(&mut line).is_ok_and(|n| n > 0) {
-                            if let Some(r) = Remote::decode(&line) {
+                            if let Some(r) = line.strip_prefix(&format!("{} ", TOKEN.lock().unwrap())).and_then(Remote::decode) {
                                 let _ = tx.unbounded_send(r);
                             }
                         }

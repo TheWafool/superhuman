@@ -4,7 +4,6 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use rusqlite::{Connection, OpenFlags};
 
@@ -34,7 +33,7 @@ fn reg_query(key: &str) -> Reg {
     if !cfg!(windows) {
         return Vec::new();
     }
-    Command::new("reg").args(["query", key, "/s"]).output().map(|o| parse_reg(&String::from_utf8_lossy(&o.stdout))).unwrap_or_default()
+    super::hidden("reg").args(["query", key, "/s"]).output().map(|o| parse_reg(&String::from_utf8_lossy(&o.stdout))).unwrap_or_default()
 }
 
 fn last_segment(key: &str) -> &str {
@@ -49,6 +48,13 @@ fn local_app_data() -> Option<PathBuf> {
     dirs::data_local_dir()
 }
 
+impl Discovered {
+    fn watch(mut self, dir: &str) -> Self {
+        self.launch = self.launch.watching(dir);
+        self
+    }
+}
+
 // ---------- Ubisoft Connect ----------
 
 pub fn ubisoft() -> Result<Vec<Discovered>, String> {
@@ -61,7 +67,7 @@ fn ubisoft_from(reg: &Reg) -> Vec<Discovered> {
             let id = last_segment(key);
             let dir = v.get("InstallDir")?.trim_end_matches(['/', '\\']);
             let title = dir.rsplit(['/', '\\']).next()?.to_owned();
-            id.chars().all(|c| c.is_ascii_digit()).then(|| game(Source::Ubisoft, id.to_owned(), title, LaunchSpec::uri(format!("uplay://launch/{id}/0"))))
+            id.chars().all(|c| c.is_ascii_digit()).then(|| game(Source::Ubisoft, id.to_owned(), title, LaunchSpec::uri(format!("uplay://launch/{id}/0"))).watch(dir))
         })
         .collect()
 }
@@ -122,9 +128,20 @@ pub fn amazon() -> Result<Vec<Discovered>, String> {
         return Ok(Vec::new());
     };
     let conn = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| format!("{}: {e}", db.display()))?;
-    let mut stmt = conn.prepare("SELECT Id, ProductTitle FROM DbSet WHERE Installed = 1").map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(|e| e.to_string())?;
-    Ok(rows.flatten().map(|(id, title)| game(Source::Amazon, id.clone(), title, LaunchSpec::uri(format!("amazon-games://play/{id}")))).collect())
+    let mut stmt = conn.prepare("SELECT Id, ProductTitle, InstallDirectory FROM DbSet WHERE Installed = 1").map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?)))
+        .map_err(|e| e.to_string())?;
+    Ok(rows
+        .flatten()
+        .map(|(id, title, dir)| {
+            let g = game(Source::Amazon, id.clone(), title, LaunchSpec::uri(format!("amazon-games://play/{id}")));
+            match dir {
+                Some(d) => g.watch(&d),
+                None => g,
+            }
+        })
+        .collect())
 }
 
 // ---------- Xbox / Game Pass ----------
@@ -134,7 +151,7 @@ pub fn xbox() -> Result<Vec<Discovered>, String> {
         return Ok(Vec::new());
     }
     let script = "Get-AppxPackage | Where-Object { $_.InstallLocation -like '*XboxGames*' } | ForEach-Object { \"$($_.PackageFamilyName)|$($_.InstallLocation)\" }";
-    let out = Command::new("powershell").args(["-NoProfile", "-Command", script]).output().map_err(|e| format!("powershell: {e}"))?;
+    let out = super::hidden("powershell").args(["-NoProfile", "-Command", script]).output().map_err(|e| format!("powershell: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout);
     Ok(text
         .lines()
@@ -142,7 +159,7 @@ pub fn xbox() -> Result<Vec<Discovered>, String> {
             let (pfn, loc) = l.trim().split_once('|')?;
             // MicrosoftGame.config sits in the install folder (or its Content sibling).
             let cfg = [Path::new(loc).join("MicrosoftGame.config"), Path::new(loc).parent()?.join("Content/MicrosoftGame.config")].into_iter().find_map(|p| std::fs::read_to_string(p).ok())?;
-            xbox_from(pfn, &cfg)
+            Some(xbox_from(pfn, &cfg)?.watch(loc))
         })
         .collect())
 }
