@@ -24,6 +24,8 @@ modules:
       - cargo build --release --offline
       - install -Dm755 target/release/superman-frontend /app/bin/superman-frontend
       - install -Dm644 dist/superman.desktop /app/share/applications/org.superman.Frontend.desktop
+      - sed -i 's/^Icon=.*/Icon=org.superman.Frontend/' /app/share/applications/org.superman.Frontend.desktop
+      - install -Dm644 dist/superman.png /app/share/icons/hicolor/512x512/apps/org.superman.Frontend.png
     sources:
       - type: dir
         path: ../..

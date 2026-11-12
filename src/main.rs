@@ -52,6 +52,7 @@ fn main() -> iced::Result {
             size: Size::new(1600.0, 900.0),
             min_size: Some(Size::new(960.0, 540.0)),
             fullscreen,
+            icon: window::icon::from_file_data(include_bytes!("../dist/superman.png"), None).ok(),
             ..Default::default()
         })
         .antialiasing(true);

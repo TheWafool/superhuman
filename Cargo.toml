@@ -29,6 +29,7 @@ assets = [
     ["target/release/superman-frontend", "usr/bin/", "755"],
     ["dist/superman-session", "usr/bin/", "755"],
     ["dist/superman.desktop", "usr/share/applications/", "644"],
+    ["dist/superman.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
     ["dist/superman-session.desktop", "usr/share/wayland-sessions/superman.desktop", "644"],
 ]
 
@@ -37,5 +38,10 @@ assets = [
     { source = "target/release/superman-frontend", dest = "/usr/bin/superman-frontend", mode = "755" },
     { source = "dist/superman-session", dest = "/usr/bin/superman-session", mode = "755" },
     { source = "dist/superman.desktop", dest = "/usr/share/applications/superman.desktop", mode = "644" },
+    { source = "dist/superman.png", dest = "/usr/share/icons/hicolor/512x512/apps/superman.png", mode = "644" },
     { source = "dist/superman-session.desktop", dest = "/usr/share/wayland-sessions/superman.desktop", mode = "644" },
 ]
+
+# Windows .exe icon (build.rs)
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

@@ -19,6 +19,7 @@ package() {
   cd "$startdir/../.."
   install -Dm755 "$srcdir/target/release/superman-frontend" "$pkgdir/usr/bin/superman-frontend"
   install -Dm644 dist/superman.desktop "$pkgdir/usr/share/applications/superman.desktop"
+  install -Dm644 dist/superman.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/superman.png"
   install -Dm755 dist/superman-session "$pkgdir/usr/bin/superman-session"
   install -Dm644 dist/superman-session.desktop "$pkgdir/usr/share/wayland-sessions/superman.desktop"
 }
