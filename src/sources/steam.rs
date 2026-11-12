@@ -18,11 +18,22 @@ struct Root {
 
 fn roots() -> Vec<Root> {
     let h = home();
-    let candidates = [
+    let mut candidates = vec![
         (h.join(".local/share/Steam"), false),
         (h.join(".steam/steam"), false),
         (h.join(".var/app/com.valvesoftware.Steam/.local/share/Steam"), true),
     ];
+    // macOS: ~/Library/Application Support/Steam
+    if let Some(d) = dirs::data_dir() {
+        candidates.push((d.join("Steam"), false));
+    }
+    if cfg!(windows) {
+        for var in ["ProgramFiles(x86)", "ProgramFiles"] {
+            if let Some(p) = std::env::var_os(var) {
+                candidates.push((PathBuf::from(p).join("Steam"), false));
+            }
+        }
+    }
     let mut seen = HashSet::new();
     candidates
         .into_iter()
@@ -34,7 +45,9 @@ fn roots() -> Vec<Root> {
 
 fn launch(root: &Root, rungameid: u64) -> LaunchSpec {
     let uri = format!("steam://rungameid/{rungameid}");
-    if root.flatpak {
+    if !cfg!(target_os = "linux") {
+        LaunchSpec::uri(uri)
+    } else if root.flatpak {
         LaunchSpec::cmd("flatpak", ["run", "com.valvesoftware.Steam", &uri])
     } else {
         LaunchSpec::cmd("steam", [uri])

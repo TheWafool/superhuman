@@ -17,6 +17,10 @@ pub enum Source {
     Desktop,
     Emulation,
     Prism,
+    Bottles,
+    Itch,
+    /// Added by hand in `games.toml`.
+    Manual,
 }
 
 impl Source {
@@ -26,10 +30,13 @@ impl Source {
             Source::Steam => 0,
             Source::Heroic => 1,
             Source::Lutris => 2,
-            Source::Prism => 3,
-            Source::Emulation => 4,
-            Source::Flatpak => 5,
-            Source::Desktop => 6,
+            Source::Manual => 3,
+            Source::Itch => 4,
+            Source::Bottles => 5,
+            Source::Prism => 6,
+            Source::Emulation => 7,
+            Source::Flatpak => 8,
+            Source::Desktop => 9,
         }
     }
 
@@ -42,6 +49,9 @@ impl Source {
             Source::Desktop => "your system",
             Source::Emulation => "Emulation",
             Source::Prism => "Prism Launcher",
+            Source::Bottles => "Bottles",
+            Source::Itch => "itch",
+            Source::Manual => "your games list",
         }
     }
 
@@ -54,6 +64,9 @@ impl Source {
             Source::Desktop => "desktop",
             Source::Emulation => "emulation",
             Source::Prism => "prism",
+            Source::Bottles => "bottles",
+            Source::Itch => "itch",
+            Source::Manual => "manual",
         }
     }
 
@@ -66,6 +79,9 @@ impl Source {
             "desktop" => Source::Desktop,
             "emulation" => Source::Emulation,
             "prism" => Source::Prism,
+            "bottles" => Source::Bottles,
+            "itch" => Source::Itch,
+            "manual" => Source::Manual,
             _ => return None,
         })
     }
@@ -214,8 +230,12 @@ pub const SHELVES: &[ShelfDef] = &[
     ShelfDef { title: "Steam", filter: |g| g.source == Source::Steam, by_recent: false, limit: usize::MAX },
     ShelfDef { title: "Heroic", filter: |g| g.source == Source::Heroic, by_recent: false, limit: usize::MAX },
     ShelfDef { title: "Lutris", filter: |g| g.source == Source::Lutris, by_recent: false, limit: usize::MAX },
+    ShelfDef { title: "itch", filter: |g| g.source == Source::Itch, by_recent: false, limit: usize::MAX },
+    ShelfDef { title: "Bottles", filter: |g| g.source == Source::Bottles, by_recent: false, limit: usize::MAX },
+    ShelfDef { title: "Added by you", filter: |g| g.source == Source::Manual, by_recent: false, limit: usize::MAX },
+    ShelfDef { title: "Minecraft instances", filter: |g| g.source == Source::Prism, by_recent: false, limit: usize::MAX },
     ShelfDef { title: "Emulation", filter: |g| g.source == Source::Emulation, by_recent: false, limit: usize::MAX },
-    ShelfDef { title: "Flatpak and system games", filter: |g| matches!(g.source, Source::Flatpak | Source::Desktop | Source::Prism), by_recent: false, limit: usize::MAX },
+    ShelfDef { title: "Flatpak and system games", filter: |g| matches!(g.source, Source::Flatpak | Source::Desktop), by_recent: false, limit: usize::MAX },
     ShelfDef { title: "All games", filter: |_| true, by_recent: false, limit: usize::MAX },
 ];
 
@@ -231,8 +251,12 @@ pub const FILTERS: &[FilterDef] = &[
     FilterDef { label: "Steam", filter: |g| g.source == Source::Steam },
     FilterDef { label: "Heroic", filter: |g| g.source == Source::Heroic },
     FilterDef { label: "Lutris", filter: |g| g.source == Source::Lutris },
+    FilterDef { label: "itch", filter: |g| g.source == Source::Itch },
+    FilterDef { label: "Bottles", filter: |g| g.source == Source::Bottles },
+    FilterDef { label: "Added by you", filter: |g| g.source == Source::Manual },
+    FilterDef { label: "Minecraft", filter: |g| g.source == Source::Prism },
     FilterDef { label: "Emulation", filter: |g| g.source == Source::Emulation },
-    FilterDef { label: "Flatpak and system", filter: |g| matches!(g.source, Source::Flatpak | Source::Desktop | Source::Prism) },
+    FilterDef { label: "Flatpak and system", filter: |g| matches!(g.source, Source::Flatpak | Source::Desktop) },
 ];
 
 /// Games matching `query` within a filter, best first. Empty query lists all, by title.

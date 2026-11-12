@@ -8,21 +8,14 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::{Discovered, LaunchSpec, home, on_path};
+use super::{Discovered, LaunchSpec, Places, on_path};
+
+const FLATPAK: &str = "com.heroicgameslauncher.hgl";
 use crate::library::Source;
 
 pub fn scan() -> Result<Vec<Discovered>, String> {
-    let h = home();
-    let mut out = Vec::new();
-    for (dir, flatpak) in [
-        (h.join(".config/heroic"), false),
-        (h.join(".var/app/com.heroicgameslauncher.hgl/config/heroic"), true),
-    ] {
-        if dir.is_dir() {
-            out.extend(scan_dir(&dir, flatpak));
-        }
-    }
-    Ok(out)
+    let places = Places { config: &["heroic"], data: &[], flatpak: Some(FLATPAK) };
+    Ok(places.existing().into_iter().flat_map(|(dir, flatpak)| scan_dir(&dir, flatpak)).collect())
 }
 
 fn json(p: &Path) -> Option<Value> {
@@ -110,8 +103,10 @@ fn titles(v: Option<&Value>, list: &str, id: &str, title: &str) -> HashMap<Strin
 
 fn launch(app: &str, runner: &str, flatpak: bool) -> LaunchSpec {
     let uri = format!("heroic://launch?appName={app}&runner={runner}");
-    if flatpak || !on_path("heroic") {
-        LaunchSpec::cmd("flatpak", ["run", "com.heroicgameslauncher.hgl", "--no-gui", &uri])
+    if !cfg!(target_os = "linux") {
+        LaunchSpec::uri(uri)
+    } else if flatpak || !on_path("heroic") {
+        LaunchSpec::cmd("flatpak", ["run", FLATPAK, "--no-gui", &uri])
     } else {
         LaunchSpec::cmd("heroic", ["--no-gui".to_owned(), uri])
     }

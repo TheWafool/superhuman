@@ -1,0 +1,226 @@
+# Emulation: where ROMs live, which systems exist, and how to start them.
+#
+# Built into the app. To change or add to it, put an `emulators.toml` next to your
+# `config.toml`: its `rom_dirs` are added to these, `[retroarch]` replaces this one, and a
+# `[[system]]` with the same `id` replaces the built-in one.
+#
+# Paths may use {home}, {config} and {data}: your home folder and the system's config and data
+# folders (~/.config and ~/.local/share on Linux, %APPDATA% on Windows,
+# ~/Library/Application Support on macOS). Paths that don't exist are skipped, so one list
+# covers every system.
+
+# Each sub-folder named after a system (snes, psx, gba…) is scanned for that system's games.
+rom_dirs = ["{home}/ROMs", "{home}/roms", "{home}/Games/ROMs", "{home}/Emulation/roms", "{home}/RetroArch/roms"]
+
+[retroarch]
+programs = [
+    "retroarch",
+    "C:/RetroArch-Win64/retroarch.exe",
+    "{data}/RetroArch/retroarch.exe",
+    "/Applications/RetroArch.app/Contents/MacOS/RetroArch",
+]
+flatpak = "org.libretro.RetroArch"
+core_dirs = [
+    "{config}/retroarch/cores",
+    "{data}/RetroArch/cores",
+    "{home}/.var/app/org.libretro.RetroArch/config/retroarch/cores",
+    "/usr/lib/libretro",
+    "/usr/lib64/libretro",
+    "/usr/lib/x86_64-linux-gnu/libretro",
+    "C:/RetroArch-Win64/cores",
+]
+# {core} is the core file, {rom} the game.
+args = ["-f", "-L", "{core}", "{rom}"]
+
+# Emulators are tried in order; the first one installed is used.
+#   { core = "snes9x" }                      a RetroArch core
+#   { program = "dolphin-emu", args = [...] } a program on PATH, or a full path
+#   { flatpak = "org.DolphinEmu.dolphin-emu", args = [...] }
+#   { mac_app = "Dolphin", args = [...] }     an app in /Applications
+# `args` defaults to ["{rom}"].
+
+[[system]]
+id = "nes"
+name = "NES"
+folders = ["nes", "famicom", "fds"]
+extensions = ["nes", "fds", "unf", "zip", "7z"]
+emulators = [{ core = "mesen" }, { core = "nestopia" }, { core = "fceumm" }]
+
+[[system]]
+id = "snes"
+name = "Super Nintendo"
+folders = ["snes", "sfc", "superfamicom", "super nintendo"]
+extensions = ["sfc", "smc", "zip", "7z"]
+emulators = [{ core = "snes9x" }, { core = "bsnes" }, { flatpak = "com.snes9x.Snes9x" }]
+
+[[system]]
+id = "n64"
+name = "Nintendo 64"
+folders = ["n64", "nintendo 64"]
+extensions = ["z64", "n64", "v64", "zip", "7z"]
+emulators = [
+    { core = "mupen64plus_next" },
+    { program = "RMG" },
+    { flatpak = "com.github.Rosalie241.RMG" },
+]
+
+[[system]]
+id = "gb"
+name = "Game Boy"
+folders = ["gb", "gameboy", "game boy"]
+extensions = ["gb", "zip", "7z"]
+emulators = [{ core = "gambatte" }, { core = "mgba" }, { program = "mgba-qt", args = ["-f", "{rom}"] }]
+
+[[system]]
+id = "gbc"
+name = "Game Boy Color"
+folders = ["gbc", "gameboy color", "game boy color"]
+extensions = ["gbc", "zip", "7z"]
+emulators = [{ core = "gambatte" }, { core = "mgba" }, { program = "mgba-qt", args = ["-f", "{rom}"] }]
+
+[[system]]
+id = "gba"
+name = "Game Boy Advance"
+folders = ["gba", "gameboy advance", "game boy advance"]
+extensions = ["gba", "zip", "7z"]
+emulators = [
+    { core = "mgba" },
+    { program = "mgba-qt", args = ["-f", "{rom}"] },
+    { flatpak = "io.mgba.mGBA", args = ["-f", "{rom}"] },
+    { mac_app = "mGBA", args = ["-f", "{rom}"] },
+]
+
+[[system]]
+id = "nds"
+name = "Nintendo DS"
+folders = ["nds", "ds", "nintendo ds"]
+extensions = ["nds", "zip", "7z"]
+emulators = [
+    { core = "melondsds" },
+    { program = "melonDS" },
+    { flatpak = "net.kuribo64.melonDS" },
+    { mac_app = "melonDS" },
+]
+
+[[system]]
+id = "3ds"
+name = "Nintendo 3DS"
+folders = ["3ds", "n3ds", "nintendo 3ds"]
+extensions = ["3ds", "cci", "cxi", "3dsx"]
+emulators = [{ program = "azahar" }, { flatpak = "org.azahar_emu.Azahar" }, { mac_app = "Azahar" }]
+
+[[system]]
+id = "gc"
+name = "GameCube"
+folders = ["gc", "gamecube", "ngc"]
+extensions = ["iso", "gcm", "gcz", "rvz", "ciso"]
+emulators = [
+    { program = "dolphin-emu", args = ["-b", "-e", "{rom}"] },
+    { flatpak = "org.DolphinEmu.dolphin-emu", args = ["-b", "-e", "{rom}"] },
+    { mac_app = "Dolphin", args = ["-b", "-e", "{rom}"] },
+    { core = "dolphin" },
+]
+
+[[system]]
+id = "wii"
+name = "Wii"
+folders = ["wii"]
+extensions = ["iso", "wbfs", "rvz", "gcz", "wad"]
+emulators = [
+    { program = "dolphin-emu", args = ["-b", "-e", "{rom}"] },
+    { flatpak = "org.DolphinEmu.dolphin-emu", args = ["-b", "-e", "{rom}"] },
+    { mac_app = "Dolphin", args = ["-b", "-e", "{rom}"] },
+]
+
+[[system]]
+id = "sms"
+name = "Master System"
+folders = ["sms", "mastersystem", "master system"]
+extensions = ["sms", "zip", "7z"]
+emulators = [{ core = "genesis_plus_gx" }]
+
+[[system]]
+id = "genesis"
+name = "Mega Drive"
+folders = ["genesis", "megadrive", "mega drive", "md"]
+extensions = ["md", "gen", "smd", "bin", "zip", "7z"]
+emulators = [{ core = "genesis_plus_gx" }, { core = "picodrive" }]
+
+[[system]]
+id = "gamegear"
+name = "Game Gear"
+folders = ["gamegear", "gg", "game gear"]
+extensions = ["gg", "zip", "7z"]
+emulators = [{ core = "genesis_plus_gx" }]
+
+[[system]]
+id = "saturn"
+name = "Saturn"
+folders = ["saturn"]
+extensions = ["cue", "chd", "m3u", "ccd"]
+emulators = [{ core = "mednafen_saturn" }, { core = "yabasanshiro" }]
+
+[[system]]
+id = "dreamcast"
+name = "Dreamcast"
+folders = ["dreamcast", "dc"]
+extensions = ["gdi", "cdi", "chd", "m3u"]
+emulators = [{ core = "flycast" }, { flatpak = "org.flycast.Flycast" }]
+
+[[system]]
+id = "psx"
+name = "PlayStation"
+folders = ["psx", "ps1", "playstation"]
+extensions = ["cue", "chd", "m3u", "pbp", "ccd"]
+emulators = [
+    { program = "duckstation-qt", args = ["-batch", "-fullscreen", "--", "{rom}"] },
+    { flatpak = "org.duckstation.DuckStation", args = ["-batch", "-fullscreen", "--", "{rom}"] },
+    { mac_app = "DuckStation", args = ["-batch", "-fullscreen", "--", "{rom}"] },
+    { core = "swanstation" },
+    { core = "mednafen_psx_hw" },
+    { core = "pcsx_rearmed" },
+]
+
+[[system]]
+id = "ps2"
+name = "PlayStation 2"
+folders = ["ps2", "playstation 2", "playstation2"]
+extensions = ["iso", "chd", "cso", "gz"]
+emulators = [
+    { program = "pcsx2-qt", args = ["-batch", "-fullscreen", "--", "{rom}"] },
+    { flatpak = "net.pcsx2.PCSX2", args = ["-batch", "-fullscreen", "--", "{rom}"] },
+    { mac_app = "PCSX2", args = ["-batch", "-fullscreen", "--", "{rom}"] },
+]
+
+[[system]]
+id = "psp"
+name = "PSP"
+folders = ["psp"]
+extensions = ["iso", "cso", "chd", "pbp"]
+emulators = [
+    { program = "PPSSPPSDL", args = ["--fullscreen", "{rom}"] },
+    { flatpak = "org.ppsspp.PPSSPP", args = ["--fullscreen", "{rom}"] },
+    { mac_app = "PPSSPPSDL", args = ["--fullscreen", "{rom}"] },
+    { core = "ppsspp" },
+]
+
+[[system]]
+id = "pce"
+name = "PC Engine"
+folders = ["pce", "pcengine", "tg16", "turbografx16"]
+extensions = ["pce", "cue", "chd", "zip", "7z"]
+emulators = [{ core = "mednafen_pce_fast" }, { core = "mednafen_pce" }]
+
+[[system]]
+id = "atari2600"
+name = "Atari 2600"
+folders = ["atari2600", "a2600", "2600"]
+extensions = ["a26", "bin", "zip", "7z"]
+emulators = [{ core = "stella" }]
+
+[[system]]
+id = "arcade"
+name = "Arcade"
+folders = ["arcade", "fbneo", "mame", "neogeo"]
+extensions = ["zip", "7z"]
+emulators = [{ core = "fbneo" }, { core = "mame" }]

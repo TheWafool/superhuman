@@ -89,7 +89,7 @@ fn parse(id: &str, text: &str) -> Option<Discovered> {
         source: if flatpak { Source::Flatpak } else { Source::Desktop },
         source_id: id.to_owned(),
         title: name?,
-        launch: LaunchSpec::Command { program, args: argv },
+        launch: LaunchSpec::cmd(program, argv),
         minutes_played: 0,
         last_played: None,
         steam_appid: None,

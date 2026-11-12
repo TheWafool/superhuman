@@ -1,0 +1,17 @@
+# Games you add by hand. Copy to ~/.config/superman/games.toml
+# (%APPDATA%\superman\games.toml on Windows, ~/Library/Application Support/superman on macOS).
+
+[[game]]
+title = "GZDoom"
+run = "/usr/bin/gzdoom"
+args = ["-iwad", "doom2.wad"]
+
+# A Windows game on Linux. Runs through umu-launcher (Proton) when it's installed, else Wine.
+[[game]]
+title = "Some Old Game"
+run = "~/Games/old-game/game.exe"
+# runner = "proton"            # or "wine", or "native"
+# prefix = "~/Games/prefixes/old-game"   # default: ~/Games/superman-prefixes/<title>
+# proton = "GE-Proton"         # umu's PROTONPATH: a path or a release name
+# steam_appid = 12345          # for art and store details
+# env = { DXVK_HUD = "fps" }

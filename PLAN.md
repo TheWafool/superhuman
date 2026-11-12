@@ -113,8 +113,9 @@ normalized title + year.
 Every scanner's paths come from a per-platform table, so one source (Steam, Heroic,
 Prism, itch, emulators) works on all three systems with only its paths changing.
 
-Emulator + runner definitions live in data files (`sources/emulators.toml`,
-`launch/runners.toml`), not code.
+Emulator definitions live in `data/emulators.toml` (built in; a user `emulators.toml`
+next to `config.toml` extends it). Hand-added games live in `games.toml` (see
+`games.example.toml`); `.exe` games on Linux run through umu-launcher or Wine.
 
 ---
 

@@ -55,7 +55,7 @@ pub struct Session {
 }
 
 pub fn start(game_id: &str, title: &str, spec: &LaunchSpec) -> Result<Session, String> {
-    let LaunchSpec::Command { program, args } = spec;
+    let LaunchSpec::Command { program, args, env, cwd } = spec;
     let scoped = on_path("systemd-run");
     let unit = scoped.then(|| unit_name(game_id));
     let mut cmd = match &unit {
@@ -66,8 +66,11 @@ pub fn start(game_id: &str, title: &str, spec: &LaunchSpec) -> Result<Session, S
         }
         None => Command::new(program),
     };
+    cmd.args(args).envs(env.iter().map(|(k, v)| (k, v)));
+    if let Some(d) = cwd {
+        cmd.current_dir(d);
+    }
     let mut child = cmd
-        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -161,14 +164,23 @@ impl Session {
         self.stopped = true;
         if let Some(p) = &self.watch {
             for pid in find(p) {
-                let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).status();
+                    terminate(pid);
             }
         } else if let Some(u) = &self.unit {
             let _ = Command::new("systemctl").args(["--user", "stop", &format!("{u}.scope")]).status();
         } else {
-            let _ = Command::new("kill").args(["-TERM", &self.pid.to_string()]).status();
+            terminate(self.pid);
         }
     }
+}
+
+fn terminate(pid: u32) {
+    let pid = pid.to_string();
+    let _ = if cfg!(windows) {
+        Command::new("taskkill").args(["/PID", &pid, "/T"]).status()
+    } else {
+        Command::new("kill").args(["-TERM", &pid]).status()
+    };
 }
 
 /// Pids whose command line contains `pattern` (excluding launcher hand-off commands).
