@@ -113,7 +113,8 @@ fn map_button(b: Button) -> Option<Action> {
         Button::West => Action::Details,
         Button::North => Action::Search,
         Button::Start => Action::Menu,
-        Button::Mode => Action::Guide,
+        // Steam grabs the Mode button for its own overlay, so the View/Select button works too.
+        Button::Mode | Button::Select => Action::Guide,
         Button::LeftTrigger => Action::PrevTab,
         Button::RightTrigger => Action::NextTab,
         _ => return None,
