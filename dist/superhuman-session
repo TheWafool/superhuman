@@ -1,0 +1,6 @@
+#!/bin/sh
+# Console-style session: Superhuman is the whole screen, inside gamescope.
+# Install: copy to /usr/local/bin/superhuman-session (chmod +x) and
+# superhuman-session.desktop to /usr/share/wayland-sessions/, then pick
+# "Superhuman" on the login screen.
+exec gamescope --fullscreen -- superhuman --session

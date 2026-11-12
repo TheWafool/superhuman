@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=Superman
+Name=Superhuman
 Comment=Controller-first game launcher
-Exec=superman-frontend --fullscreen
-Icon=superman
+Exec=superhuman --fullscreen
+Icon=superhuman
 Categories=Game;
 Terminal=false

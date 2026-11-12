@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=Superman
+Name=Superhuman
 Comment=Couch game launcher as the whole session
-Exec=superman-session
+Exec=superhuman-session
 Type=Application
 DesktopNames=gamescope

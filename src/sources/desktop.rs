@@ -10,7 +10,7 @@ use crate::library::Source;
 const SKIP_IDS: &[&str] = &[
     "steam", "com.valvesoftware.Steam", "lutris", "net.lutris.Lutris", "heroic", "com.heroicgameslauncher.hgl",
     "com.usebottles.bottles", "io.itch.itch", "itch", "org.prismlauncher.PrismLauncher", "net.davidotek.pupgui2",
-    "org.vinegarhq.Vinegar", "superman",
+    "org.vinegarhq.Vinegar", "superhuman",
 ];
 /// Entries created by launchers for their own games: their scanners already report them.
 const SKIP_EXEC: &[&str] = &["steam://rungameid", "lutris:rungameid", "heroic://launch"];

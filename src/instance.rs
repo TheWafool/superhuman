@@ -1,4 +1,4 @@
-//! One copy at a time. A second `superman` (or `superman --launch <game id>`) hands its request
+//! One copy at a time. A second `superhuman` (or `superhuman --launch <game id>`) hands its request
 //! to the running one over a private socket and exits. Unix only for now; Windows runs without.
 
 use std::sync::Mutex;
@@ -52,13 +52,13 @@ static TOKEN: Mutex<String> = Mutex::new(String::new());
 
 #[cfg(not(unix))]
 fn token_file() -> std::path::PathBuf {
-    dirs::data_local_dir().unwrap_or_else(std::env::temp_dir).join("superman").join("instance.token")
+    dirs::data_local_dir().unwrap_or_else(std::env::temp_dir).join("superhuman").join("instance.token")
 }
 
 #[cfg(unix)]
 fn socket() -> std::path::PathBuf {
     // XDG_RUNTIME_DIR is private to the user (0700); elsewhere use the user's cache folder.
-    dirs::runtime_dir().or_else(dirs::cache_dir).unwrap_or_else(std::env::temp_dir).join("superman.sock")
+    dirs::runtime_dir().or_else(dirs::cache_dir).unwrap_or_else(std::env::temp_dir).join("superhuman.sock")
 }
 
 /// Hand `req` to a running copy. Returns true if one took it (this copy should exit).

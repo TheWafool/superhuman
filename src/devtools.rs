@@ -1,8 +1,8 @@
 //! Dev-only automation: script inputs and capture a screenshot of the app itself.
 //!
-//! `SUPERMAN_KEYS="r,r,d,a"` presses actions (u/d/l/r, a=confirm, b=back, x, y, m, lb, rb).
-//! `SUPERMAN_SHOT=/path.png` saves a screenshot after the keys, then exits.
-//! `SUPERMAN_SHOT_DELAY=ms` waits longer before the screenshot (default 900).
+//! `SUPERHUMAN_KEYS="r,r,d,a"` presses actions (u/d/l/r, a=confirm, b=back, x, y, m, lb, rb).
+//! `SUPERHUMAN_SHOT=/path.png` saves a screenshot after the keys, then exits.
+//! `SUPERHUMAN_SHOT_DELAY=ms` waits longer before the screenshot (default 900).
 
 use std::time::Duration;
 
@@ -14,8 +14,8 @@ use crate::Message;
 use crate::input::Action;
 
 pub fn boot() -> Task<Message> {
-    let keys = std::env::var("SUPERMAN_KEYS").unwrap_or_default();
-    let shot = std::env::var_os("SUPERMAN_SHOT").is_some();
+    let keys = std::env::var("SUPERHUMAN_KEYS").unwrap_or_default();
+    let shot = std::env::var_os("SUPERHUMAN_SHOT").is_some();
     if keys.is_empty() && !shot {
         return Task::none();
     }
@@ -28,7 +28,7 @@ pub fn boot() -> Task<Message> {
             tokio::time::sleep(Duration::from_millis(220)).await;
         }
         if shot {
-            let ms = std::env::var("SUPERMAN_SHOT_DELAY").ok().and_then(|v| v.parse().ok()).unwrap_or(900);
+            let ms = std::env::var("SUPERHUMAN_SHOT_DELAY").ok().and_then(|v| v.parse().ok()).unwrap_or(900);
             tokio::time::sleep(Duration::from_millis(ms)).await;
             let _ = out.send(Message::DevShoot).await;
         }
@@ -40,7 +40,7 @@ pub fn shoot() -> Task<Message> {
 }
 
 pub fn save(s: Screenshot) -> Task<Message> {
-    if let Some(path) = std::env::var_os("SUPERMAN_SHOT") {
+    if let Some(path) = std::env::var_os("SUPERHUMAN_SHOT") {
         if let Err(e) = image::save_buffer(&path, &s.rgba, s.size.width, s.size.height, image::ColorType::Rgba8) {
             eprintln!("screenshot failed: {e}");
         }

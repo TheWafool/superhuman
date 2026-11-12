@@ -135,7 +135,7 @@ pub fn start(game_id: &str, title: &str, spec: &LaunchSpec) -> Result<Session, S
 fn unit_name(game_id: &str) -> String {
     let safe: String = game_id.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).take(48).collect();
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    format!("superman-{safe}-{ts}")
+    format!("superhuman-{safe}-{ts}")
 }
 
 impl Session {

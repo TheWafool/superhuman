@@ -371,7 +371,7 @@ pub fn build_shelves(games: &[Game]) -> Vec<Shelf> {
     out
 }
 
-/// Placeholder library for screenshots and UI work: `SUPERMAN_DEMO=1`.
+/// Placeholder library for screenshots and UI work: `SUPERHUMAN_DEMO=1`.
 pub fn demo() -> Vec<Game> {
     let now = Local::now().timestamp();
     let day = 86_400;

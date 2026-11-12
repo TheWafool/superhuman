@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn reads_db() {
-        let dir = std::env::temp_dir().join(format!("superman-itch-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("superhuman-itch-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let db = dir.join("butler.db");
         let _ = std::fs::remove_file(&db);

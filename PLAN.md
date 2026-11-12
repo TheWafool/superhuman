@@ -1,4 +1,4 @@
-# Superman Frontend — plan
+# Superhuman Frontend — plan
 
 A controller-first, couch-distance game launcher for every way you play on Linux
 (and later Windows/macOS). One library, correct art, real metadata, and a launch
@@ -34,7 +34,7 @@ Non-goals (v1): a store, friends/chat, cloud saves of our own, achievements sync
 | Image pipeline | **image** + **fast_image_resize**, decoded to GPU textures | Pre-scaled to display size, cached on disk as WebP |
 | Parsing | `keyvalues-parser` (Steam VDF), `serde_json`, `freedesktop-desktop-entry` | Source scanners |
 | Process tracking | `systemd-run --user --scope` (Linux), job objects (Windows) | Reliable “is the game still running” + playtime even for launcher chains |
-| Config | `serde` + TOML at `$XDG_CONFIG_HOME/superman/config.toml` | Data-driven, human-editable |
+| Config | `serde` + TOML at `$XDG_CONFIG_HOME/superhuman/config.toml` | Data-driven, human-editable |
 
 Alternative considered: Slint (nice declarative animations, weaker async/image
 story). Bevy (great rendering, too much engine for a launcher). Revisit only if
@@ -129,7 +129,7 @@ enum LaunchSpec {
     Flatpak { app_ref, args },
 }
 ```
-- Every launch goes through `systemd-run --user --scope --unit=superman-<id>`
+- Every launch goes through `systemd-run --user --scope --unit=superhuman-<id>`
   so the whole process tree is tracked — fixes the classic “launcher exits
   immediately, game keeps running” problem (Steam, Heroic, Lutris all do this).
 - For URI launchers, wait for a child to appear in the scope or match the game
@@ -160,7 +160,7 @@ Resolution order, stop at the first full hit per slot:
 5. Generated fallback: title set in the display face over a gradient taken from
    the icon. Never a stretched icon.
 
-Cache: `$XDG_CACHE_HOME/superman/art/<game_id>/<slot>.webp` at display size, plus
+Cache: `$XDG_CACHE_HOME/superhuman/art/<game_id>/<slot>.webp` at display size, plus
 a dominant + accent colour pair extracted once (k-means on the hero) and stored
 in SQLite — the UI’s ambient colour comes from this (§7).
 
@@ -289,13 +289,13 @@ start the game. Check it opens in Steam, then try again.”
 
 ## 8. Session mode (feels like a console)
 
-- `superman --session`: ships a `superman-session.desktop` for display managers
-  that runs `gamescope -e -f -- superman`, so the launcher is the whole session.
+- `superhuman --session`: ships a `superhuman-session.desktop` for display managers
+  that runs `gamescope -e -f -- superhuman`, so the launcher is the whole session.
 - In session mode we own the quick-menu overlay via gamescope’s focus handling;
   Steam’s own overlay keeps working for Steam games.
 - Desktop mode: fullscreen borderless window, autostart optional, single
   instance (second launch focuses the first via a unix socket — also lets
-  `superman --launch <id>` work from scripts).
+  `superhuman --launch <id>` work from scripts).
 - Power menu: suspend, restart, shut down, switch to desktop.
 
 ---

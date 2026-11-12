@@ -3,21 +3,21 @@
 
 use std::path::PathBuf;
 
-const NAME: &str = "Superman";
+const NAME: &str = "Superhuman";
 #[cfg(target_os = "macos")]
-const AGENT: &str = "app.superman.launcher";
+const AGENT: &str = "app.superhuman.launcher";
 
 fn exe() -> String {
-    std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "superman-frontend".into())
+    std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "superhuman".into())
 }
 
 fn file() -> Option<PathBuf> {
     if cfg!(target_os = "macos") {
-        dirs::home_dir().map(|h| h.join("Library/LaunchAgents/app.superman.launcher.plist"))
+        dirs::home_dir().map(|h| h.join("Library/LaunchAgents/app.superhuman.launcher.plist"))
     } else if cfg!(windows) {
         None
     } else {
-        dirs::config_dir().map(|d| d.join("autostart/superman.desktop"))
+        dirs::config_dir().map(|d| d.join("autostart/superhuman.desktop"))
     }
 }
 

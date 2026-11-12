@@ -1,11 +1,11 @@
 # Flatpak manifest (untested). Games run on the host, so the sandbox needs --talk-name=org.freedesktop.Flatpak
 # or flatpak-spawn --host; until that is sorted, prefer the native packages.
-app-id: org.superman.Frontend
+app-id: org.superhuman.Frontend
 runtime: org.freedesktop.Platform
 runtime-version: '24.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions: [org.freedesktop.Sdk.Extension.rust-stable]
-command: superman-frontend
+command: superhuman
 finish-args:
   - --share=network
   - --socket=wayland
@@ -16,16 +16,16 @@ finish-args:
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
   env:
-    CARGO_HOME: /run/build/superman/cargo
+    CARGO_HOME: /run/build/superhuman/cargo
 modules:
-  - name: superman
+  - name: superhuman
     buildsystem: simple
     build-commands:
       - cargo build --release --offline
-      - install -Dm755 target/release/superman-frontend /app/bin/superman-frontend
-      - install -Dm644 dist/superman.desktop /app/share/applications/org.superman.Frontend.desktop
-      - sed -i 's/^Icon=.*/Icon=org.superman.Frontend/' /app/share/applications/org.superman.Frontend.desktop
-      - install -Dm644 dist/superman.png /app/share/icons/hicolor/512x512/apps/org.superman.Frontend.png
+      - install -Dm755 target/release/superhuman /app/bin/superhuman
+      - install -Dm644 dist/superhuman.desktop /app/share/applications/org.superhuman.Frontend.desktop
+      - sed -i 's/^Icon=.*/Icon=org.superhuman.Frontend/' /app/share/applications/org.superhuman.Frontend.desktop
+      - install -Dm644 dist/superhuman.png /app/share/icons/hicolor/512x512/apps/org.superhuman.Frontend.png
     sources:
       - type: dir
         path: ../..

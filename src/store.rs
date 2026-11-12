@@ -28,7 +28,7 @@ pub struct Row {
 }
 
 pub fn default_path() -> PathBuf {
-    dirs::data_dir().unwrap_or_else(|| crate::sources::home().join(".local/share")).join("superman/library.db")
+    dirs::data_dir().unwrap_or_else(|| crate::sources::home().join(".local/share")).join("superhuman/library.db")
 }
 
 impl Store {

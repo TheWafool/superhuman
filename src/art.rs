@@ -68,7 +68,7 @@ pub enum Slot {
 }
 
 pub fn cache_dir() -> PathBuf {
-    dirs::cache_dir().unwrap_or_else(|| crate::sources::home().join(".cache")).join("superman/art")
+    dirs::cache_dir().unwrap_or_else(|| crate::sources::home().join(".cache")).join("superhuman/art")
 }
 
 fn game_dir(game_id: &str) -> PathBuf {
@@ -78,7 +78,7 @@ fn game_dir(game_id: &str) -> PathBuf {
 
 pub fn client() -> reqwest::Client {
     reqwest::Client::builder()
-        .user_agent(concat!("superman-launcher/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("superhuman-launcher/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(45))
         .build()
         .unwrap_or_default()

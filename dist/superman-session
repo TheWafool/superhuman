@@ -1,6 +1,0 @@
-#!/bin/sh
-# Console-style session: Superman is the whole screen, inside gamescope.
-# Install: copy to /usr/local/bin/superman-session (chmod +x) and
-# superman-session.desktop to /usr/share/wayland-sessions/, then pick
-# "Superman" on the login screen.
-exec gamescope --fullscreen -- superman-frontend --session

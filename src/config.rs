@@ -1,4 +1,4 @@
-//! User settings at `$XDG_CONFIG_HOME/superman/config.toml`.
+//! User settings at `$XDG_CONFIG_HOME/superhuman/config.toml`.
 //!
 //! Secrets (API keys) live only here or in the environment, never in the binary.
 
@@ -24,8 +24,36 @@ pub struct Config {
     pub disabled_sources: Vec<String>,
 }
 
+/// The app was called Superman before; move its folders (settings, library, art) over once.
+pub fn migrate_old_name() {
+    let pairs = [dirs::config_dir(), dirs::data_dir(), dirs::cache_dir()].map(|b| b.map(|b| (b.join("superman"), b.join("superhuman"))));
+    let mut moved_cache = None;
+    for (i, (old, new)) in pairs.into_iter().flatten().enumerate() {
+        if old.is_dir() && !new.exists() && std::fs::rename(&old, &new).is_ok() && i == 2 {
+            moved_cache = Some((old, new));
+        }
+    }
+    // Saved art paths point into the cache folder.
+    if let Some((old, new)) = moved_cache {
+        let db = crate::store::default_path();
+        if let Ok(c) = rusqlite::Connection::open(&db) {
+            let (o, n) = (old.to_string_lossy(), new.to_string_lossy());
+            for col in ["cover", "hero", "logo", "backdrop"] {
+                let _ = c.execute(&format!("UPDATE art_v2 SET {col} = replace({col}, ?1, ?2)"), [&*o, &*n]);
+            }
+        }
+    }
+    // A login entry under the old name would start the old binary path; recreate it.
+    if let Some(d) = dirs::config_dir() {
+        let old = d.join("autostart/superman.desktop");
+        if old.is_file() && std::fs::remove_file(&old).is_ok() {
+            let _ = crate::autostart::set(true);
+        }
+    }
+}
+
 pub fn path() -> PathBuf {
-    dirs::config_dir().unwrap_or_else(|| crate::sources::home().join(".config")).join("superman/config.toml")
+    dirs::config_dir().unwrap_or_else(|| crate::sources::home().join(".config")).join("superhuman/config.toml")
 }
 
 pub fn load() -> Config {
@@ -36,7 +64,7 @@ pub fn load() -> Config {
         }),
         Err(_) => Config::default(),
     };
-    if let Ok(k) = std::env::var("SUPERMAN_STEAMGRIDDB_KEY") {
+    if let Ok(k) = std::env::var("SUPERHUMAN_STEAMGRIDDB_KEY") {
         cfg.steamgriddb_api_key = Some(k);
     }
     cfg.steamgriddb_api_key = cfg.steamgriddb_api_key.filter(|k| !k.trim().is_empty());
@@ -44,7 +72,7 @@ pub fn load() -> Config {
 }
 
 /// Change settings on disk. Reads the file itself (not the environment), so a key passed in
-/// through `SUPERMAN_STEAMGRIDDB_KEY` is never written out. The file stays private (0600).
+/// through `SUPERHUMAN_STEAMGRIDDB_KEY` is never written out. The file stays private (0600).
 pub fn update(change: impl FnOnce(&mut Config)) -> Result<(), String> {
     let p = path();
     let mut cfg: Config = std::fs::read_to_string(&p).ok().and_then(|t| toml::from_str(&t).ok()).unwrap_or_default();

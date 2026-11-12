@@ -71,7 +71,7 @@ fn discovered(e: Entry) -> Discovered {
         _ => LaunchSpec::cmd(run_s, e.args),
     };
     if runner != "native" {
-        let prefix = e.prefix.as_deref().map(expand).unwrap_or_else(|| home().join("Games/superman-prefixes").join(slug(&e.title)));
+        let prefix = e.prefix.as_deref().map(expand).unwrap_or_else(|| home().join("Games/superhuman-prefixes").join(slug(&e.title)));
         spec = spec.with_env("WINEPREFIX", prefix.to_string_lossy());
     }
     for (k, v) in e.env {

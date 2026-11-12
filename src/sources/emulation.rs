@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn finds_roms() {
         let d: Data = toml::from_str(BUILT_IN).unwrap();
-        let dir = std::env::temp_dir().join(format!("superman-roms-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("superhuman-roms-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         for f in ["SNES/a.sfc", "snes/notes.txt", "psx/FF7/ff7.m3u", "psx/FF7/ff7 (Disc 1).chd", "psx/Crash.chd", "loose.gba", "loose.zip"] {
             let p = dir.join(f);

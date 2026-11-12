@@ -38,13 +38,14 @@ fn main() -> iced::Result {
         // SAFETY: first thing in main, before any other thread exists.
         unsafe { std::env::set_var("PATH", format!("{path}:/opt/homebrew/bin:/usr/local/bin")) };
     }
+    config::migrate_old_name();
     // A copy is already running: hand it our request (focus, or --launch <id>) and stop.
     if instance::claim(&instance::Remote::from_args()) {
         return Ok(());
     }
     let fullscreen = std::env::args().any(|a| a == "--fullscreen" || a == "--session") || config::load().fullscreen;
     let mut app = iced::application(App::new, App::update, App::view)
-        .title("Superman")
+        .title("Superhuman")
         .subscription(App::subscription)
         .scale_factor(|app: &App| app.scale)
         .default_font(theme::body(iced::font::Weight::Normal))
@@ -52,7 +53,7 @@ fn main() -> iced::Result {
             size: Size::new(1600.0, 900.0),
             min_size: Some(Size::new(960.0, 540.0)),
             fullscreen,
-            icon: window::icon::from_file_data(include_bytes!("../dist/superman.png"), None).ok(),
+            icon: window::icon::from_file_data(include_bytes!("../dist/superhuman.png"), None).ok(),
             ..Default::default()
         })
         .antialiasing(true);
@@ -331,7 +332,7 @@ impl App {
 
     fn init() -> Self {
         // Cached library first, so the first frame already shows games.
-        let (store, games) = if std::env::var_os("SUPERMAN_DEMO").is_some() {
+        let (store, games) = if std::env::var_os("SUPERHUMAN_DEMO").is_some() {
             (None, library::demo())
         } else {
             match store::Store::open(&store::default_path()) {
@@ -422,7 +423,7 @@ impl App {
             games: Vec::new(),
             shelves: Vec::new(),
         };
-        app.reduce_motion = app.config.reduce_motion || std::env::var_os("SUPERMAN_REDUCE_MOTION").is_some();
+        app.reduce_motion = app.config.reduce_motion || std::env::var_os("SUPERHUMAN_REDUCE_MOTION").is_some();
         app.set_library(games);
         app.snap_animations();
         app
@@ -1464,7 +1465,7 @@ impl App {
             SettingInfo(ReduceMotion, "Display", "Reduce motion", on(self.reduce_motion), "Moves focus instantly instead of animating."),
             SettingInfo(Clock, "Display", "Clock", if self.config.clock_12h { "12-hour".into() } else { "24-hour".into() }, "How the time is shown."),
             SettingInfo(ApiKey, "Art", "SteamGridDB API key", key, "Needed for covers of games that aren't on Steam. Get a free key at steamgriddb.com, under Preferences > API."),
-            SettingInfo(Autostart, "System", "Start with your computer", on(self.autostart), "Opens Superman full screen when you log in."),
+            SettingInfo(Autostart, "System", "Start with your computer", on(self.autostart), "Opens Superhuman full screen when you log in."),
             SettingInfo(About, "System", "About", format!("Version {}", env!("CARGO_PKG_VERSION")), "Select to open the folder with your settings and games list."),
         ]
     }
@@ -1666,7 +1667,7 @@ impl App {
         v.push((MenuItem::Sleep, "Sleep".into()));
         v.push((MenuItem::Restart, if armed(MenuItem::Restart) { "Press again to restart".into() } else { "Restart".into() }));
         v.push((MenuItem::ShutDown, if armed(MenuItem::ShutDown) { "Press again to shut down".into() } else { "Shut down".into() }));
-        v.push((MenuItem::Leave, if self.session_mode { "Switch to desktop".into() } else { "Close Superman".into() }));
+        v.push((MenuItem::Leave, if self.session_mode { "Switch to desktop".into() } else { "Close Superhuman".into() }));
         v
     }
 
@@ -1757,7 +1758,7 @@ impl App {
         }
     }
 
-    /// Start a game by any of its copies' ids (`superman --launch steam:367520`).
+    /// Start a game by any of its copies' ids (`superhuman --launch steam:367520`).
     fn launch_id(&mut self, id: &str) {
         let Some(gi) = self.games.iter().position(|g| g.id == id || g.copies.iter().any(|c| c == id)) else {
             self.notice(&format!("No game with the id {id}"));

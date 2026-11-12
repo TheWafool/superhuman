@@ -1,5 +1,5 @@
 [package]
-name = "superman-frontend"
+name = "superhuman"
 version = "0.1.0"
 edition = "2024"
 
@@ -26,20 +26,20 @@ section = "games"
 depends = "$auto, libxkbcommon0, libudev1"
 recommends = "gamescope, umu-launcher"
 assets = [
-    ["target/release/superman-frontend", "usr/bin/", "755"],
-    ["dist/superman-session", "usr/bin/", "755"],
-    ["dist/superman.desktop", "usr/share/applications/", "644"],
-    ["dist/superman.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
-    ["dist/superman-session.desktop", "usr/share/wayland-sessions/superman.desktop", "644"],
+    ["target/release/superhuman", "usr/bin/", "755"],
+    ["dist/superhuman-session", "usr/bin/", "755"],
+    ["dist/superhuman.desktop", "usr/share/applications/", "644"],
+    ["dist/superhuman.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
+    ["dist/superhuman-session.desktop", "usr/share/wayland-sessions/superhuman.desktop", "644"],
 ]
 
 [package.metadata.generate-rpm]
 assets = [
-    { source = "target/release/superman-frontend", dest = "/usr/bin/superman-frontend", mode = "755" },
-    { source = "dist/superman-session", dest = "/usr/bin/superman-session", mode = "755" },
-    { source = "dist/superman.desktop", dest = "/usr/share/applications/superman.desktop", mode = "644" },
-    { source = "dist/superman.png", dest = "/usr/share/icons/hicolor/512x512/apps/superman.png", mode = "644" },
-    { source = "dist/superman-session.desktop", dest = "/usr/share/wayland-sessions/superman.desktop", mode = "644" },
+    { source = "target/release/superhuman", dest = "/usr/bin/superhuman", mode = "755" },
+    { source = "dist/superhuman-session", dest = "/usr/bin/superhuman-session", mode = "755" },
+    { source = "dist/superhuman.desktop", dest = "/usr/share/applications/superhuman.desktop", mode = "644" },
+    { source = "dist/superhuman.png", dest = "/usr/share/icons/hicolor/512x512/apps/superhuman.png", mode = "644" },
+    { source = "dist/superhuman-session.desktop", dest = "/usr/share/wayland-sessions/superhuman.desktop", mode = "644" },
 ]
 
 # Windows .exe icon (build.rs)

@@ -15,7 +15,7 @@ const PANEL_W: f32 = 560.0;
 const PAD: f32 = 56.0;
 /// One handle for the app's lifetime, so the image is decoded and uploaded once.
 static LOGO: std::sync::LazyLock<image::Handle> =
-    std::sync::LazyLock::new(|| image::Handle::from_bytes(&include_bytes!("../../dist/superman-mark.png")[..]));
+    std::sync::LazyLock::new(|| image::Handle::from_bytes(&include_bytes!("../../dist/superhuman-mark.png")[..]));
 
 fn group(m: MenuItem) -> u8 {
     match m {
