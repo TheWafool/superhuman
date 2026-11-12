@@ -58,6 +58,16 @@ impl Store {
                 ambient INTEGER, accent INTEGER,
                 fetched_at INTEGER NOT NULL,
                 with_key INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE IF NOT EXISTS overrides (
+                game_id TEXT PRIMARY KEY,
+                sgdb_id INTEGER,
+                cover_url TEXT, hero_url TEXT, logo_url TEXT
+             );
+             CREATE TABLE IF NOT EXISTS meta (
+                game_id TEXT PRIMARY KEY,
+                json TEXT NOT NULL,
+                fetched_at INTEGER NOT NULL
              );",
         )?;
         Ok(Self { conn })
@@ -183,6 +193,52 @@ impl Store {
 
     pub fn mark_played(&self, id: &str, unix: i64) -> rusqlite::Result<()> {
         self.conn.execute("UPDATE games SET last_played = ?2 WHERE id = ?1", params![id, unix])?;
+        Ok(())
+    }
+
+    pub fn load_overrides(&self) -> rusqlite::Result<HashMap<String, crate::art::Override>> {
+        let mut stmt = self.conn.prepare("SELECT game_id, sgdb_id, cover_url, hero_url, logo_url FROM overrides")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, crate::art::Override { sgdb_id: r.get::<_, Option<i64>>(1)?.map(|v| v as u64), pins: [r.get(2)?, r.get(3)?, r.get(4)?] }))
+        })?;
+        Ok(rows.flatten().collect())
+    }
+
+    pub fn save_override(&self, game_id: &str, o: &crate::art::Override) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO overrides (game_id, sgdb_id, cover_url, hero_url, logo_url) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![game_id, o.sgdb_id.map(|v| v as i64), o.pins[0], o.pins[1], o.pins[2]],
+        )?;
+        Ok(())
+    }
+
+    /// game_id → (details, fetched_at unix)
+    pub fn load_meta(&self) -> rusqlite::Result<HashMap<String, (crate::meta::Meta, i64)>> {
+        let mut stmt = self.conn.prepare("SELECT game_id, json, fetched_at FROM meta")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))?;
+        Ok(rows.flatten().filter_map(|(id, j, at)| Some((id, (serde_json::from_str(&j).ok()?, at)))).collect())
+    }
+
+    pub fn save_meta(&self, game_id: &str, m: &crate::meta::Meta) -> rusqlite::Result<()> {
+        let j = serde_json::to_string(m).unwrap_or_default();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta (game_id, json, fetched_at) VALUES (?1, ?2, ?3)",
+            params![game_id, j, chrono::Utc::now().timestamp()],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_favorite(&self, ids: &[String], on: bool) -> rusqlite::Result<()> {
+        for id in ids {
+            self.conn.execute("UPDATE games SET favorite = ?2 WHERE id = ?1", params![id, on])?;
+        }
+        Ok(())
+    }
+
+    pub fn set_hidden(&self, ids: &[String], on: bool) -> rusqlite::Result<()> {
+        for id in ids {
+            self.conn.execute("UPDATE games SET hidden = ?2 WHERE id = ?1", params![id, on])?;
+        }
         Ok(())
     }
 

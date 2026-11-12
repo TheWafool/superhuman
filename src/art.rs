@@ -33,10 +33,35 @@ pub struct Request {
     pub game_id: String,
     pub title: String,
     pub steam_appid: Option<u32>,
+    pub pick: Override,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Slot {
+/// What the player chose on the game page: the right SteamGridDB game, and pinned images.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Override {
+    /// `Some(0)` = "none of these": skip SteamGridDB for this game.
+    pub sgdb_id: Option<u64>,
+    /// Image URLs per slot (cover, hero, logo).
+    pub pins: [Option<String>; 3],
+}
+
+/// A picture to choose from in the art picker.
+#[derive(Debug, Clone)]
+pub struct Choice {
+    pub url: String,
+    pub thumb: String,
+}
+
+/// A SteamGridDB game to match against.
+#[derive(Debug, Clone)]
+pub struct Candidate {
+    pub id: u64,
+    pub name: String,
+    pub year: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
     Cover,
     Hero,
     Logo,
@@ -54,7 +79,7 @@ fn game_dir(game_id: &str) -> PathBuf {
 pub fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(concat!("superman-launcher/", env!("CARGO_PKG_VERSION")))
-        .timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(45))
         .build()
         .unwrap_or_default()
 }
@@ -62,18 +87,30 @@ pub fn client() -> reqwest::Client {
 /// Fetch and process all art for one game. Never fails: missing slots stay `None`.
 pub async fn fetch(http: reqwest::Client, sgdb_key: Option<String>, req: Request) -> Art {
     let mut raw: [Option<Vec<u8>>; 3] = [None, None, None];
-    let slots = [Slot::Cover, Slot::Hero, Slot::Logo];
+    let slots = Slot::ALL;
 
+    for (i, pin) in req.pick.pins.iter().enumerate() {
+        if let Some(url) = pin {
+            raw[i] = get_bytes(&http, url).await;
+        }
+    }
     if let Some(appid) = req.steam_appid {
         for (i, &slot) in slots.iter().enumerate() {
-            raw[i] = steam_cdn(&http, appid, slot).await;
+            if raw[i].is_none() {
+                raw[i] = steam_cdn(&http, appid, slot).await;
+            }
         }
     }
 
     if raw.iter().any(Option::is_none) {
         if let Some(key) = &sgdb_key {
             let sgdb = Sgdb { http: &http, key };
-            if let Some(id) = sgdb.game_id(&req).await {
+            let id = match req.pick.sgdb_id {
+                Some(0) => None,
+                Some(id) => Some(id),
+                None => sgdb.game_id(&req).await,
+            };
+            if let Some(id) = id {
                 for (i, &slot) in slots.iter().enumerate() {
                     if raw[i].is_none() {
                         raw[i] = sgdb.image(id, slot).await;
@@ -145,31 +182,115 @@ impl Sgdb<'_> {
         let term = urlencode(&req.title);
         let results = self.get(&format!("/search/autocomplete/{term}")).await?;
         let list = results.as_array()?;
-        // Prefer an exact title match, else the first (best) result.
+        // Exact title matches only: a wrong guess is worse than a title card ("Fix match" covers the rest).
         let key = crate::library::match_key(&req.title);
         list.iter()
-            .find(|g| g.get("name").and_then(Value::as_str).is_some_and(|n| crate::library::match_key(n) == key))
-            .or_else(|| list.first())
+            .find(|g| g.get("name").and_then(Value::as_str).is_some_and(|n| same_title(n, &key)))
             .and_then(|g| g.get("id")?.as_u64())
     }
 
-    async fn image(&self, id: u64, slot: Slot) -> Option<Vec<u8>> {
+    async fn list(&self, id: u64, slot: Slot) -> Vec<Choice> {
         let filters = "types=static&nsfw=false&humor=false";
         let path = match slot {
             Slot::Cover => format!("/grids/game/{id}?dimensions=600x900,660x930&{filters}"),
             Slot::Hero => format!("/heroes/game/{id}?{filters}"),
             Slot::Logo => format!("/logos/game/{id}?{filters}"),
         };
-        let list = self.get(&path).await?;
-        for item in list.as_array()?.iter().take(3) {
-            if let Some(url) = item.get("url").and_then(Value::as_str) {
-                if let Some(b) = get_bytes(self.http, url).await {
-                    return Some(b);
-                }
+        let Some(list) = self.get(&path).await else { return Vec::new() };
+        list.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|i| {
+                let url = i.get("url")?.as_str()?.to_owned();
+                let thumb = i.get("thumb").and_then(Value::as_str).unwrap_or(&url).to_owned();
+                Some(Choice { url, thumb })
+            })
+            .collect()
+    }
+
+    async fn image(&self, id: u64, slot: Slot) -> Option<Vec<u8>> {
+        for c in self.list(id, slot).await.iter().take(3) {
+            if let Some(b) = get_bytes(self.http, &c.url).await {
+                return Some(b);
             }
         }
         None
     }
+
+    async fn search(&self, term: &str) -> Vec<Candidate> {
+        let Some(list) = self.get(&format!("/search/autocomplete/{}", urlencode(term))).await else { return Vec::new() };
+        list.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|g| {
+                let year = g.get("release_date").and_then(Value::as_i64).and_then(|t| chrono::DateTime::from_timestamp(t, 0)).map(|d| {
+                    use chrono::Datelike;
+                    d.year()
+                });
+                Some(Candidate { id: g.get("id")?.as_u64()?, name: g.get("name")?.as_str()?.to_owned(), year })
+            })
+            .collect()
+    }
+}
+
+impl Slot {
+    pub const ALL: [Slot; 3] = [Slot::Cover, Slot::Hero, Slot::Logo];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Slot::Cover => "Cover",
+            Slot::Hero => "Background",
+            Slot::Logo => "Logo",
+        }
+    }
+}
+
+/// Games on SteamGridDB that might be this one.
+pub async fn search(http: reqwest::Client, key: String, term: String) -> Vec<Candidate> {
+    Sgdb { http: &http, key: &key }.search(&term).await
+}
+
+/// Pictures to choose from for one slot, using the player's match if they made one.
+pub async fn choices(http: reqwest::Client, key: String, req: Request, slot: Slot) -> Vec<Choice> {
+    let sgdb = Sgdb { http: &http, key: &key };
+    let id = match req.pick.sgdb_id {
+        Some(0) => return Vec::new(),
+        Some(id) => Some(id),
+        None => sgdb.game_id(&req).await,
+    };
+    match id {
+        Some(id) => sgdb.list(id, slot).await.into_iter().take(24).collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Download a thumbnail into the cache (named by URL hash) and return its path.
+pub async fn thumb(http: reqwest::Client, url: String) -> Option<PathBuf> {
+    let h = url.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+    let path = cache_dir().join("thumbs").join(format!("{h:016x}.png"));
+    if path.is_file() {
+        return Some(path);
+    }
+    let bytes = get_bytes(&http, &url).await?;
+    tokio::task::spawn_blocking(move || {
+        let img = image::load_from_memory(&bytes).ok()?;
+        let img = if img.width() > 640 { img.resize(640, 640, FilterType::Triangle) } else { img };
+        std::fs::create_dir_all(path.parent()?).ok()?;
+        img.save_with_format(&path, ImageFormat::Png).ok()?;
+        Some(path)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Exact match, ignoring a trailing note like "(Program)" or "(2018)".
+fn same_title(name: &str, key: &str) -> bool {
+    let base = match name.rfind(" (") {
+        Some(i) if name.ends_with(')') => &name[..i],
+        _ => name,
+    };
+    crate::library::match_key(name) == key || crate::library::match_key(base) == key
 }
 
 fn urlencode(s: &str) -> String {
@@ -182,30 +303,34 @@ fn urlencode(s: &str) -> String {
 }
 
 fn process(dir: &Path, raw: [Option<Vec<u8>>; 3]) -> Art {
+    // Fresh names each time: textures are cached by path, so reusing one would show the old image.
+    let _ = std::fs::remove_dir_all(dir);
     let _ = std::fs::create_dir_all(dir);
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+    let name = |n: &str, ext: &str| dir.join(format!("{n}-{stamp}.{ext}"));
     let decode = |b: &Option<Vec<u8>>| b.as_ref().and_then(|b| image::load_from_memory(b).ok());
     let (cover, hero, logo) = (decode(&raw[0]), decode(&raw[1]), decode(&raw[2]));
     let mut art = Art::default();
 
     if let Some(img) = &cover {
         let out = img.resize_to_fill(COVER.0, COVER.1, FilterType::Lanczos3);
-        art.cover = save_jpeg(&out, &dir.join("cover.jpg"));
+        art.cover = save_jpeg(&out, &name("cover", "jpg"));
     }
     if let Some(img) = &hero {
         let out = if img.width() > HERO_MAX_W { img.resize(HERO_MAX_W, u32::MAX, FilterType::Lanczos3) } else { img.clone() };
-        let path = dir.join("hero.png");
+        let path = name("hero", "png");
         art.hero = fade_bottom(&out).save_with_format(&path, ImageFormat::Png).ok().map(|_| path);
     }
     if let Some(img) = &logo {
         let img = trim_transparent(img);
         let out = if img.width() > LOGO_MAX.0 || img.height() > LOGO_MAX.1 { img.resize(LOGO_MAX.0, LOGO_MAX.1, FilterType::Lanczos3) } else { img };
-        let path = dir.join("logo.png");
+        let path = name("logo", "png");
         art.logo = out.save_with_format(&path, ImageFormat::Png).ok().map(|_| path);
     }
     if let Some(src) = hero.as_ref().or(cover.as_ref()) {
         let small = src.resize_to_fill(BACKDROP.0, BACKDROP.1, FilterType::Triangle);
         let blurred = DynamicImage::ImageRgba8(image::imageops::blur(&small, 7.0));
-        art.backdrop = save_jpeg(&blurred, &dir.join("backdrop.jpg"));
+        art.backdrop = save_jpeg(&blurred, &name("backdrop", "jpg"));
         let (amb, acc) = palette(src);
         art.ambient = Some(amb);
         art.accent = Some(acc);
@@ -317,6 +442,12 @@ mod tests {
         let (amb, acc) = palette(&img);
         assert!(amb >> 16 > (amb >> 8) & 0xff, "ambient should be reddish: {amb:06x}");
         assert!(acc >> 16 > (acc >> 8) & 0xff, "accent should be reddish: {acc:06x}");
+    }
+
+    #[test]
+    fn title_notes() {
+        assert!(same_title("Sober (Program)", "sober"));
+        assert!(!same_title("SoberUp", "sober"));
     }
 
     #[test]

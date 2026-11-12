@@ -80,6 +80,8 @@ pub struct Game {
     pub launch: LaunchSpec,
     /// Other launchers that also have this game.
     pub also_on: Vec<Source>,
+    /// Every DB row merged into this card (for favourite/hide on all copies).
+    pub copies: Vec<String>,
     pub minutes_played: u32,
     pub last_played: Option<DateTime<Local>>,
     pub favorite: bool,
@@ -174,12 +176,14 @@ pub fn from_rows(mut rows: Vec<Row>) -> Vec<Game> {
             g.minutes_played = g.minutes_played.max(r.minutes_played);
             g.last_played = g.last_played.max(last);
             g.favorite |= r.favorite;
+            g.copies.push(r.id);
             continue;
         }
         let (ambient, accent) = placeholder_colors(&r.title);
         by_key.insert(key, games.len());
         by_key.insert(alt_key, games.len());
         games.push(Game {
+            copies: vec![r.id.clone()],
             id: r.id,
             title: r.title,
             source: r.source,

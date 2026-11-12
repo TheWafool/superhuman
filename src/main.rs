@@ -5,6 +5,7 @@ mod devtools;
 mod input;
 mod launch;
 mod library;
+mod meta;
 mod sources;
 mod store;
 mod theme;
@@ -55,8 +56,33 @@ pub enum Message {
     Allocated(PathBuf, Result<iced::widget::image::Allocation, iced::widget::image::Error>),
     /// Check on the running game.
     Poll,
+    MetaFetched(String, meta::Meta),
+    Candidates(String, Vec<art::Candidate>),
+    Choices(String, art::Slot, Vec<art::Choice>),
+    Thumb(String, Option<PathBuf>),
     DevShoot,
     DevShot(window::Screenshot),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+    Home,
+    /// Game page for `selected`.
+    Game,
+    /// "Which game is this?" list.
+    Match,
+    /// Art picker.
+    Art,
+}
+
+/// Game page buttons, in order. Labels come from `App::page_buttons`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageButton {
+    Play,
+    Favourite,
+    FixMatch,
+    ChangeArt,
+    Hide,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +150,24 @@ pub struct App {
     pub playing: Blend,
     /// First press of "Close game" arms it; a second press within the window closes the game.
     pub stop_armed: Option<Instant>,
+    /// Tasks started from input handling, run after the current update.
+    pending: Vec<Task<Message>>,
+
+    pub screen: Screen,
+    /// Focused button on the game page / row in a list / tile in the art picker.
+    pub page_focus: usize,
+    pub list_focus: usize,
+    pub art_slot: art::Slot,
+    pub hide_armed: bool,
+    /// SteamGridDB matches for the match screen (None = loading).
+    pub candidates: Option<Vec<art::Candidate>>,
+    /// Pictures for the art picker (None = loading).
+    pub choices: Option<Vec<art::Choice>>,
+    /// thumb URL → file on disk.
+    pub thumbs: HashMap<String, PathBuf>,
+    pub overrides: HashMap<String, art::Override>,
+    pub meta: HashMap<String, (meta::Meta, i64)>,
+    meta_loading: HashSet<String>,
 }
 
 impl App {
@@ -158,6 +202,9 @@ impl App {
             art.insert(id.clone(), a);
             art_meta.insert(id, (at, key));
         }
+        let store_ref = store.as_ref();
+        let overrides = store_ref.and_then(|s| s.load_overrides().ok()).unwrap_or_default();
+        let meta_cache = store_ref.and_then(|s| s.load_meta().ok()).unwrap_or_default();
         let mut app = Self {
             store,
             config: config::load(),
@@ -195,6 +242,18 @@ impl App {
             overlay: false,
             playing: Blend::new(0.0),
             stop_armed: None,
+            pending: Vec::new(),
+            screen: Screen::Home,
+            page_focus: 0,
+            list_focus: 0,
+            art_slot: art::Slot::Cover,
+            hide_armed: false,
+            candidates: None,
+            choices: None,
+            thumbs: HashMap::new(),
+            overrides,
+            meta: meta_cache,
+            meta_loading: HashSet::new(),
             games: Vec::new(),
             shelves: Vec::new(),
         };
@@ -264,9 +323,29 @@ impl App {
             };
             if needs {
                 self.art_queued.insert(g.id.clone());
-                self.art_queue.push_back(art::Request { game_id: g.id.clone(), title: g.title.clone(), steam_appid: g.steam_appid });
+                let req = self.request(gi);
+                self.art_queue.push_back(req);
             }
         }
+        self.pump_art()
+    }
+
+    fn request(&self, gi: usize) -> art::Request {
+        let g = &self.games[gi];
+        art::Request {
+            game_id: g.id.clone(),
+            title: g.title.clone(),
+            steam_appid: g.steam_appid,
+            pick: self.overrides.get(&g.id).cloned().unwrap_or_default(),
+        }
+    }
+
+    /// Fetch a game's art again now (after a new match or pinned picture).
+    fn refetch(&mut self, gi: usize) -> Task<Message> {
+        let req = self.request(gi);
+        self.art_queue.retain(|r| r.game_id != req.game_id);
+        self.art_queued.insert(req.game_id.clone());
+        self.art_queue.push_front(req);
         self.pump_art()
     }
 
@@ -377,6 +456,16 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let t = self.handle(message);
+        if self.pending.is_empty() {
+            return t;
+        }
+        let mut all = std::mem::take(&mut self.pending);
+        all.push(t);
+        Task::batch(all)
+    }
+
+    fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Pad(PadEvent::Connected(kind)) => self.pad = kind,
             Message::Pad(PadEvent::Disconnected) => self.pad = PadKind::Keyboard,
@@ -448,6 +537,37 @@ impl App {
                 }
             },
             Message::Poll => return self.poll(),
+            Message::MetaFetched(id, m) => {
+                self.meta_loading.remove(&id);
+                if let Some(store) = &self.store {
+                    let _ = store.save_meta(&id, &m);
+                }
+                self.meta.insert(id, (m, chrono::Utc::now().timestamp()));
+            }
+            Message::Candidates(id, list) => {
+                if self.screen == Screen::Match && self.games.get(self.selected).is_some_and(|g| g.id == id) {
+                    self.candidates = Some(list);
+                }
+            }
+            Message::Choices(id, slot, list) => {
+                if self.screen == Screen::Art && self.art_slot == slot && self.games.get(self.selected).is_some_and(|g| g.id == id) {
+                    let tasks: Vec<_> = list
+                        .iter()
+                        .filter(|c| !self.thumbs.contains_key(&c.thumb))
+                        .map(|c| {
+                            let url = c.thumb.clone();
+                            Task::perform(art::thumb(self.http.clone(), url.clone()), move |p| Message::Thumb(url.clone(), p))
+                        })
+                        .collect();
+                    self.choices = Some(list);
+                    return Task::batch(tasks);
+                }
+            }
+            Message::Thumb(url, path) => {
+                if let Some(p) = path {
+                    self.thumbs.insert(url, p);
+                }
+            }
             Message::DevShoot => return devtools::shoot(),
             Message::DevShot(s) => return devtools::save(s),
             Message::Resized(logical) => {
@@ -519,6 +639,12 @@ impl App {
                 _ => {}
             }
             return;
+        }
+        match self.screen {
+            Screen::Home => {}
+            Screen::Game => return self.act_page(a),
+            Screen::Match => return self.act_match(a),
+            Screen::Art => return self.act_art(a),
         }
         match (self.focus, a) {
             (_, Action::Search) => self.notice("Search arrives in milestone 6."),
@@ -672,7 +798,163 @@ impl App {
     }
 
     fn details(&mut self) {
-        self.notice("Game pages arrive in milestone 5.");
+        if self.games.get(self.selected).is_none() {
+            return;
+        }
+        self.screen = Screen::Game;
+        self.page_focus = 0;
+        self.hide_armed = false;
+        let g = &self.games[self.selected];
+        let stale = self.meta.get(&g.id).is_none_or(|(_, at)| chrono::Utc::now().timestamp() - at > 14 * 86_400);
+        if let Some(appid) = g.steam_appid.filter(|_| stale && !self.meta_loading.contains(&g.id) && self.store.is_some()) {
+            let id = g.id.clone();
+            self.meta_loading.insert(id.clone());
+            self.pending.push(Task::perform(meta::fetch(self.http.clone(), appid), move |m| Message::MetaFetched(id.clone(), m)));
+        }
+    }
+
+    pub fn page_buttons(&self) -> Vec<(PageButton, &'static str)> {
+        let g = &self.games[self.selected];
+        let running = self.session.as_ref().is_some_and(|s| s.game_id == g.id);
+        vec![
+            (PageButton::Play, if running { "Now playing" } else { "Play" }),
+            (PageButton::Favourite, if g.favorite { "Unfavourite" } else { "Favourite" }),
+            (PageButton::FixMatch, "Fix match"),
+            (PageButton::ChangeArt, "Change art"),
+            (PageButton::Hide, if self.hide_armed { "Press again to hide" } else { "Hide game" }),
+        ]
+    }
+
+    fn act_page(&mut self, a: Action) {
+        let n = self.page_buttons().len();
+        if a != Action::Confirm {
+            self.hide_armed = false;
+        }
+        match a {
+            Action::Left => self.page_focus = self.page_focus.saturating_sub(1),
+            Action::Right => self.page_focus = (self.page_focus + 1).min(n - 1),
+            Action::Back => self.screen = Screen::Home,
+            Action::Confirm => {
+                let (b, _) = self.page_buttons()[self.page_focus];
+                if b != PageButton::Hide {
+                    self.hide_armed = false;
+                }
+                self.page_action(b);
+            }
+            _ => {}
+        }
+    }
+
+    fn page_action(&mut self, b: PageButton) {
+        let has_key = self.config.steamgriddb_api_key.clone();
+        let g = self.games[self.selected].clone();
+        match b {
+            PageButton::Play => self.play(),
+            PageButton::Favourite => {
+                let on = !g.favorite;
+                if let Some(store) = &self.store {
+                    let _ = store.set_favorite(&g.copies, on);
+                }
+                self.games[self.selected].favorite = on;
+                self.reshelve();
+            }
+            PageButton::FixMatch | PageButton::ChangeArt if has_key.is_none() => {
+                self.notice("Add a SteamGridDB API key to config.toml to pick art.");
+            }
+            PageButton::FixMatch => {
+                self.screen = Screen::Match;
+                self.list_focus = 0;
+                self.candidates = None;
+                let id = g.id.clone();
+                let key = has_key.unwrap_or_default();
+                self.pending.push(Task::perform(art::search(self.http.clone(), key, g.title.clone()), move |l| Message::Candidates(id.clone(), l)));
+            }
+            PageButton::ChangeArt => {
+                self.screen = Screen::Art;
+                self.open_slot(art::Slot::Cover);
+            }
+            PageButton::Hide if !self.hide_armed => self.hide_armed = true,
+            PageButton::Hide => {
+                if let Some(store) = &self.store {
+                    let _ = store.set_hidden(&g.copies, true);
+                }
+                self.hide_armed = false;
+                self.screen = Screen::Home;
+                let games: Vec<Game> = self.games.iter().filter(|x| x.id != g.id).cloned().collect();
+                self.set_library(games);
+                self.notice(&format!("Hid {}", g.title));
+            }
+        }
+    }
+
+    /// Rebuild shelves after a change to the current games (favourite), keeping focus.
+    fn reshelve(&mut self) {
+        let games = std::mem::take(&mut self.games);
+        self.set_library(games);
+    }
+
+    fn open_slot(&mut self, slot: art::Slot) {
+        self.art_slot = slot;
+        self.list_focus = 0;
+        self.choices = None;
+        let key = self.config.steamgriddb_api_key.clone().unwrap_or_default();
+        let req = self.request(self.selected);
+        let id = req.game_id.clone();
+        self.pending.push(Task::perform(art::choices(self.http.clone(), key, req, slot), move |l| Message::Choices(id.clone(), slot, l)));
+    }
+
+    fn act_match(&mut self, a: Action) {
+        // Rows: each candidate, then "None of these".
+        let n = self.candidates.as_ref().map_or(0, |c| c.len() + 1);
+        match a {
+            Action::Up => self.list_focus = self.list_focus.saturating_sub(1),
+            Action::Down if n > 0 => self.list_focus = (self.list_focus + 1).min(n - 1),
+            Action::Back => self.screen = Screen::Game,
+            Action::Confirm if n > 0 => {
+                let pick = self.candidates.as_ref().and_then(|c| c.get(self.list_focus)).map_or(0, |c| c.id);
+                let id = self.games[self.selected].id.clone();
+                // A new match makes earlier pinned pictures meaningless.
+                let o = art::Override { sgdb_id: Some(pick), pins: Default::default() };
+                self.set_override(&id, o);
+                self.screen = Screen::Game;
+                let t = self.refetch(self.selected);
+                self.pending.push(t);
+                self.notice(if pick == 0 { "Using a title card for this game" } else { "Matched. Fetching art" });
+            }
+            _ => {}
+        }
+    }
+
+    fn act_art(&mut self, a: Action) {
+        // Tiles: "Automatic", then each choice.
+        let n = self.choices.as_ref().map_or(0, |c| c.len() + 1);
+        let slots = art::Slot::ALL;
+        let si = slots.iter().position(|&s| s == self.art_slot).unwrap_or(0);
+        match a {
+            Action::Left => self.list_focus = self.list_focus.saturating_sub(1),
+            Action::Right if n > 0 => self.list_focus = (self.list_focus + 1).min(n - 1),
+            Action::PrevTab | Action::Up if si > 0 => self.open_slot(slots[si - 1]),
+            Action::NextTab | Action::Down if si + 1 < slots.len() => self.open_slot(slots[si + 1]),
+            Action::Back => self.screen = Screen::Game,
+            Action::Confirm if n > 0 => {
+                let url = if self.list_focus == 0 { None } else { self.choices.as_ref().and_then(|c| c.get(self.list_focus - 1)).map(|c| c.url.clone()) };
+                let id = self.games[self.selected].id.clone();
+                let mut o = self.overrides.get(&id).cloned().unwrap_or_default();
+                o.pins[si] = url;
+                self.set_override(&id, o);
+                let t = self.refetch(self.selected);
+                self.pending.push(t);
+                self.notice(&format!("{} updated", self.art_slot.label()));
+            }
+            _ => {}
+        }
+    }
+
+    fn set_override(&mut self, id: &str, o: art::Override) {
+        if let Some(store) = &self.store {
+            let _ = store.save_override(id, &o);
+        }
+        self.overrides.insert(id.to_owned(), o);
     }
 
     fn notice(&mut self, text: &str) {
@@ -701,11 +983,20 @@ impl App {
     }
 
     fn view(&self) -> iced::Element<'_, Message> {
+        let base = match self.screen {
+            Screen::Home => ui::home::view(self),
+            Screen::Game => ui::game::view(self),
+            Screen::Match => ui::game::matches(self),
+            Screen::Art => ui::game::art_picker(self),
+        };
+        let mut layers = iced::widget::stack![base];
         if self.playing.get() > 0.005 {
-            iced::widget::stack![ui::home::view(self), ui::playing::view(self)].into()
-        } else {
-            ui::home::view(self)
+            layers = layers.push(ui::playing::view(self));
         }
+        if let Some((msg, _)) = &self.toast {
+            layers = layers.push(ui::home::toast(msg));
+        }
+        layers.into()
     }
 }
 

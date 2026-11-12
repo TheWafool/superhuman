@@ -16,10 +16,10 @@ pub const ROW_H: f32 = LABEL_H + COVER_BAND + 36.0;
 const LABEL_H: f32 = 48.0;
 const COVER_BAND: f32 = cover::H * (1.0 + cover::FOCUS_GROW);
 const HERO_H: f32 = 400.0;
-const FOOTER_H: f32 = 96.0;
+pub(crate) const FOOTER_H: f32 = 96.0;
 /// Sharp hero art height (art is ~3.1:1, designed against a 1920-wide canvas).
 const HERO_ART_H: f32 = 620.0;
-const LOGO_H: f32 = 128.0;
+pub(crate) const LOGO_H: f32 = 128.0;
 /// The shelf fade ends at the same darkness as the footer, so there's no seam.
 const FOOTER_DIM: f32 = 0.8;
 
@@ -43,10 +43,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         footer(app),
     ];
 
-    let mut layers = stack![art_layers(app), content, top_bar(app)];
-    if let Some((msg, _)) = &app.toast {
-        layers = layers.push(toast(msg));
-    }
+    let layers = stack![art_layers(app), content, top_bar(app)];
 
     container(layers)
         .width(Fill)
@@ -61,7 +58,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
 
 /// Blurred backdrop + sharp hero art for the focused game, crossfading from the previous one,
 /// under scrims that keep text legible.
-fn art_layers(app: &App) -> Element<'_, Message> {
+pub(crate) fn art_layers(app: &App) -> Element<'_, Message> {
     let t = app.fade();
     let mut layers = stack![].width(Fill).height(Fill);
     for (gi, opacity) in [(app.prev_selected, 1.0 - t), (Some(app.selected), t)] {
@@ -109,7 +106,7 @@ fn art_layers(app: &App) -> Element<'_, Message> {
     layers.into()
 }
 
-fn top_bar(app: &App) -> Element<'_, Message> {
+pub(crate) fn top_bar(app: &App) -> Element<'_, Message> {
     let pad = match app.pad {
         crate::input::PadKind::Keyboard => "Keyboard",
         crate::input::PadKind::Xbox => "Controller",
@@ -169,7 +166,7 @@ fn hero(app: &App) -> Element<'_, Message> {
         .into()
 }
 
-fn hero_button(label: &str, focused: bool, hero_f: f32) -> Element<'_, Message> {
+pub(crate) fn hero_button(label: &str, focused: bool, hero_f: f32) -> Element<'_, Message> {
     let t = if focused { hero_f } else { 0.0 };
     let bg = theme::lerp(alpha(DUSK, 0.6), MARQUEE, t);
     let fg = theme::lerp(PAPER, NIGHT, t);
@@ -308,7 +305,7 @@ fn footer(app: &App) -> Element<'_, Message> {
         .into()
 }
 
-fn glyph(label: &str) -> Element<'_, Message> {
+pub(crate) fn glyph(label: &str) -> Element<'_, Message> {
     let wide = label.chars().count() > 1;
     container(text(label).size(15).font(body(Weight::Bold)).color(PAPER))
         .width(if wide { 46.0 } else { 32.0 })
@@ -323,7 +320,7 @@ fn glyph(label: &str) -> Element<'_, Message> {
         .into()
 }
 
-fn toast(msg: &str) -> Element<'_, Message> {
+pub(crate) fn toast(msg: &str) -> Element<'_, Message> {
     container(
         container(text(msg).size(size::S))
             .padding([18.0, 28.0])
