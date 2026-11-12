@@ -40,7 +40,30 @@ pub fn scan() -> Result<Vec<Discovered>, String> {
             }
         }
     }
+    // Play time, best effort: Galaxy's database keeps minutes per `gog_<id>` release key.
+    let times = galaxy_minutes();
+    for g in &mut out {
+        g.minutes_played = times.get(&format!("gog_{}", g.source_id)).copied().unwrap_or(0);
+    }
     Ok(out)
+}
+
+fn galaxy_minutes() -> std::collections::HashMap<String, u32> {
+    let mut m = std::collections::HashMap::new();
+    let base = if cfg!(windows) {
+        std::env::var_os("ProgramData").map(|p| PathBuf::from(p).join(r"GOG.com\Galaxy\storage"))
+    } else {
+        Some(PathBuf::from("/Users/Shared/GOG.com/Galaxy/Storage"))
+    };
+    let Some(db) = base.map(|b| b.join("galaxy-2.0.db")).filter(|p| p.is_file()) else { return m };
+    let Ok(conn) = rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else { return m };
+    let Ok(mut stmt) = conn.prepare("SELECT releaseKey, SUM(gameTime) FROM GameTimes GROUP BY releaseKey") else { return m };
+    if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
+        for (k, v) in rows.flatten() {
+            m.insert(k, (v.max(0) / 60) as u32);
+        }
+    }
+    m
 }
 
 fn parse(text: &str, dir: &Path) -> Option<Discovered> {

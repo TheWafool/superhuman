@@ -41,7 +41,10 @@ impl Remote {
 #[cfg(unix)]
 static LISTENER: Mutex<Option<std::os::unix::net::UnixListener>> = Mutex::new(None);
 #[cfg(not(unix))]
-static LISTENER: Mutex<Option<()>> = Mutex::new(None);
+static LISTENER: Mutex<Option<std::net::TcpListener>> = Mutex::new(None);
+/// Windows has no Unix sockets in std; a loopback port (taken exclusively) does the same job.
+#[cfg(not(unix))]
+const ADDR: &str = "127.0.0.1:47619";
 
 #[cfg(unix)]
 fn socket() -> std::path::PathBuf {
@@ -78,7 +81,20 @@ pub fn claim(req: &Remote) -> bool {
 }
 
 #[cfg(not(unix))]
-pub fn claim(_: &Remote) -> bool {
+pub fn claim(req: &Remote) -> bool {
+    use std::io::Write;
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+    use std::time::Duration;
+    let addr: SocketAddr = ADDR.parse().unwrap();
+    if let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
+        if s.write_all(req.encode().as_bytes()).is_ok() {
+            return true;
+        }
+    }
+    match TcpListener::bind(addr) {
+        Ok(l) => *LISTENER.lock().unwrap() = Some(l),
+        Err(e) => eprintln!("single instance: {ADDR}: {e}"),
+    }
     false
 }
 
@@ -104,7 +120,19 @@ pub fn requests() -> Subscription<Remote> {
                 });
             }
             #[cfg(not(unix))]
-            drop(tx);
+            if let Some(l) = LISTENER.lock().unwrap().take() {
+                std::thread::spawn(move || {
+                    use std::io::{BufRead, BufReader, Read};
+                    for conn in l.incoming().flatten() {
+                        let mut line = String::new();
+                        if BufReader::new(conn.take(1024)).read_line(&mut line).is_ok_and(|n| n > 0) {
+                            if let Some(r) = Remote::decode(&line) {
+                                let _ = tx.unbounded_send(r);
+                            }
+                        }
+                    }
+                });
+            }
             while let Some(r) = rx.next().await {
                 let _ = out.send(r).await;
             }

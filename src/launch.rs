@@ -49,6 +49,9 @@ pub struct Session {
     unit: Option<String>,
     /// Running in its own process group (no systemd).
     grouped: bool,
+    /// Windows Job Object holding the game's whole process tree (0 = none).
+    #[cfg(windows)]
+    job: isize,
     cgroup: Option<PathBuf>,
     exited: Arc<AtomicBool>,
     watch: Option<String>,
@@ -86,6 +89,8 @@ pub fn start(game_id: &str, title: &str, spec: &LaunchSpec) -> Result<Session, S
         .spawn()
         .map_err(|e| format!("{program}: {e}"))?;
     let pid = child.id();
+    #[cfg(windows)]
+    let job = job::adopt(&child);
     let exited = Arc::new(AtomicBool::new(false));
     let flag = exited.clone();
     // Reap it so it doesn't linger as a zombie.
@@ -101,6 +106,8 @@ pub fn start(game_id: &str, title: &str, spec: &LaunchSpec) -> Result<Session, S
         pid,
         unit,
         grouped,
+        #[cfg(windows)]
+        job,
         cgroup: None,
         exited,
         watch: watch_pattern(game_id),
@@ -147,6 +154,8 @@ impl Session {
         }
         match &self.cgroup {
             Some(cg) => std::fs::read_to_string(cg.join("cgroup.procs")).is_ok_and(|s| !s.trim().is_empty()),
+            #[cfg(windows)]
+            None if self.job != 0 => job::active(self.job),
             None if self.grouped => Command::new("kill").args(["-0", "--", &format!("-{}", self.pid)]).stderr(Stdio::null()).status().is_ok_and(|s| s.success()),
             None => !self.exited.load(Ordering::Relaxed),
         }
@@ -179,11 +188,62 @@ impl Session {
             }
         } else if let Some(u) = &self.unit {
             let _ = Command::new("systemctl").args(["--user", "stop", &format!("{u}.scope")]).status();
+        } else if self.job_stop() {
         } else if self.grouped {
             let _ = Command::new("kill").args(["-TERM", "--", &format!("-{}", self.pid)]).status();
         } else {
             terminate(self.pid);
         }
+    }
+}
+
+impl Session {
+    #[cfg(windows)]
+    fn job_stop(&self) -> bool {
+        self.job != 0 && job::terminate(self.job)
+    }
+    #[cfg(not(windows))]
+    fn job_stop(&self) -> bool {
+        false
+    }
+}
+
+/// Windows: the child and everything it starts live in one Job Object, so a launcher that exits
+/// early doesn't lose the game, and closing it ends the whole tree.
+#[cfg(windows)]
+mod job {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JobObjectBasicAccountingInformation,
+        QueryInformationJobObject, TerminateJobObject,
+    };
+
+    pub fn adopt(child: &std::process::Child) -> isize {
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() || AssignProcessToJobObject(job, child.as_raw_handle() as _) == 0 {
+                return 0;
+            }
+            job as isize
+        }
+    }
+
+    pub fn active(job: isize) -> bool {
+        unsafe {
+            let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = std::mem::zeroed();
+            let ok = QueryInformationJobObject(
+                job as _,
+                JobObjectBasicAccountingInformation,
+                &mut info as *mut _ as *mut _,
+                std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                std::ptr::null_mut(),
+            );
+            ok != 0 && info.ActiveProcesses > 0
+        }
+    }
+
+    pub fn terminate(job: isize) -> bool {
+        unsafe { TerminateJobObject(job as _, 1) != 0 }
     }
 }
 

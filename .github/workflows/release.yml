@@ -1,0 +1,46 @@
+# On a v* tag: build every package and attach them to a GitHub release.
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev libxkbcommon-dev
+      - run: cargo install cargo-deb cargo-generate-rpm
+      - run: cargo build --release --locked
+      - run: cargo deb --no-build
+      - run: cargo generate-rpm
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/debian/*.deb
+            target/generate-rpm/*.rpm
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --locked
+      - run: Compress-Archive target/release/superman-frontend.exe superman-windows.zip
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: superman-windows.zip
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: dist/packaging/build-macos-app.sh
+        env:
+          # Optional; unsigned builds work but Gatekeeper will complain.
+          SIGN_ID: ${{ secrets.MAC_SIGN_ID }}
+          NOTARY_PROFILE: ${{ secrets.MAC_NOTARY_PROFILE }}
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: target/Superman.dmg

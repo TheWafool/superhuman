@@ -1,9 +1,8 @@
-# Builds and tests on all three systems; tagged pushes (v*) attach the binaries to a release.
+# Builds and tests on all three systems. Releases are built by release.yml.
 name: build
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
 jobs:
   build:

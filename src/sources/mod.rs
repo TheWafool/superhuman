@@ -12,6 +12,7 @@ pub mod manual;
 pub mod prism;
 pub mod steam;
 pub mod vdf;
+pub mod winstores;
 
 use std::path::{Path, PathBuf};
 
@@ -84,7 +85,7 @@ pub struct ScanResult {
 
 /// Run every scanner. Sources that aren't installed return an empty Ok.
 pub fn scan_all() -> Vec<ScanResult> {
-    let scanners: [(Source, fn() -> Result<Vec<Discovered>, String>); 11] = [
+    let scanners: [(Source, fn() -> Result<Vec<Discovered>, String>); 16] = [
         (Source::Steam, steam::scan),
         (Source::Lutris, lutris::scan),
         (Source::Heroic, heroic::scan),
@@ -93,6 +94,11 @@ pub fn scan_all() -> Vec<ScanResult> {
         (Source::Itch, itch::scan),
         (Source::Epic, epic::scan),
         (Source::Gog, gog::scan),
+        (Source::Xbox, winstores::xbox),
+        (Source::Ubisoft, winstores::ubisoft),
+        (Source::Ea, winstores::ea),
+        (Source::BattleNet, winstores::battlenet),
+        (Source::Amazon, winstores::amazon),
         (Source::Prism, prism::scan),
         (Source::Emulation, emulation::scan),
         (Source::Manual, manual::scan),
