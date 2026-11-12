@@ -53,6 +53,8 @@ pub enum Message {
     Scanned(Arc<Vec<sources::ScanResult>>),
     ArtFetched(String, art::Art, bool),
     Allocated(PathBuf, Result<iced::widget::image::Allocation, iced::widget::image::Error>),
+    /// Check on the running game.
+    Poll,
     DevShoot,
     DevShot(window::Screenshot),
 }
@@ -113,6 +115,15 @@ pub struct App {
     pub reduce_motion: bool,
     pub toast: Option<(String, Instant)>,
     pub clock: DateTime<Local>,
+
+    /// The game we launched and are watching.
+    pub session: Option<launch::Session>,
+    pub status: launch::Status,
+    /// "Now playing" overlay: shown flag and its fade.
+    pub overlay: bool,
+    pub playing: Blend,
+    /// First press of "Close game" arms it; a second press within the window closes the game.
+    pub stop_armed: Option<Instant>,
 }
 
 impl App {
@@ -179,6 +190,11 @@ impl App {
             reduce_motion: std::env::var_os("SUPERMAN_REDUCE_MOTION").is_some(),
             toast: None,
             clock: Local::now(),
+            session: None,
+            status: launch::Status::Starting,
+            overlay: false,
+            playing: Blend::new(0.0),
+            stop_armed: None,
             games: Vec::new(),
             shelves: Vec::new(),
         };
@@ -324,7 +340,8 @@ impl App {
     }
 
     fn rescan(&mut self) -> Task<Message> {
-        if self.store.is_none() || self.scanning {
+        // No disk churn while a game is running.
+        if self.store.is_none() || self.scanning || self.session.is_some() {
             return Task::none();
         }
         self.scanning = true;
@@ -354,6 +371,7 @@ impl App {
             || !self.scroll_y.settled()
             || !self.ambient_t.settled()
             || !self.hero_focus.settled()
+            || !self.playing.settled()
             || self.scroll_x.iter().any(|s| !s.settled())
             || self.grow.iter().flatten().any(|g| !g.settled())
     }
@@ -429,6 +447,7 @@ impl App {
                     self.textures.remove(&path);
                 }
             },
+            Message::Poll => return self.poll(),
             Message::DevShoot => return devtools::shoot(),
             Message::DevShot(s) => return devtools::save(s),
             Message::Resized(logical) => {
@@ -473,6 +492,8 @@ impl App {
 
         self.scroll_y.step(dt, instant);
         self.hero_focus.step(dt, instant);
+        // A fade, not movement: keep it with reduced motion.
+        self.playing.step(dt, false);
         // Colour crossfades even with reduced motion (it's not movement).
         self.ambient_t.step(dt, false);
         for s in &mut self.scroll_x {
@@ -489,6 +510,14 @@ impl App {
     fn act(&mut self, a: Action) {
         let rows = self.shelves.len();
         if rows == 0 {
+            return;
+        }
+        if self.overlay {
+            match a {
+                Action::Back => self.set_overlay(false),
+                Action::Details => self.stop_game(),
+                _ => {}
+            }
             return;
         }
         match (self.focus, a) {
@@ -555,18 +584,91 @@ impl App {
 
     fn play(&mut self) {
         let Some(g) = self.games.get(self.selected) else { return };
+        if let Some(sess) = &self.session {
+            if sess.game_id == g.id {
+                self.set_overlay(true);
+            } else {
+                let msg = format!("{} is still running. Close it before starting another game.", sess.title);
+                self.notice(&msg);
+            }
+            return;
+        }
         let title = g.title.clone();
-        match launch::start(&g.launch) {
-            Ok(()) => {
+        match launch::start(&g.id, &g.title, &g.launch) {
+            Ok(sess) => {
                 let now = Local::now();
                 if let Some(store) = &self.store {
                     let _ = store.mark_played(&g.id, now.timestamp());
                 }
                 self.games[self.selected].last_played = Some(now);
-                self.notice(&format!("Starting {title}"));
+                self.session = Some(sess);
+                self.status = launch::Status::Starting;
+                self.stop_armed = None;
+                self.set_overlay(true);
             }
             Err(e) => self.notice(&format!("{title} didn't start: {e}")),
         }
+    }
+
+    fn set_overlay(&mut self, on: bool) {
+        self.overlay = on;
+        self.playing.set(if on { 1.0 } else { 0.0 });
+        self.stop_armed = None;
+    }
+
+    fn stop_game(&mut self) {
+        let Some(sess) = &mut self.session else { return };
+        if self.stop_armed.is_some_and(|t| t.elapsed() < Duration::from_secs(3)) {
+            sess.stop();
+            self.stop_armed = None;
+        } else {
+            self.stop_armed = Some(Instant::now());
+        }
+    }
+
+    /// Follow the running game; when it closes, record playtime and come back to the same card.
+    fn poll(&mut self) -> Task<Message> {
+        let Some(sess) = &mut self.session else { return Task::none() };
+        self.status = sess.poll();
+        if self.stop_armed.is_some_and(|t| t.elapsed() >= Duration::from_secs(3)) {
+            self.stop_armed = None;
+        }
+        let (id, title, stopped) = (sess.game_id.clone(), sess.title.clone(), sess.stopped);
+        let msg = match self.status {
+            launch::Status::Starting | launch::Status::Running => return Task::none(),
+            launch::Status::Ended(d) => {
+                let mins = ((d.as_secs() + 30) / 60) as u32;
+                if mins > 0 {
+                    if let Some(store) = &self.store {
+                        let _ = store.add_playtime(&id, mins);
+                    }
+                    if let Some(g) = self.games.iter_mut().find(|g| g.id == id) {
+                        g.minutes_played += mins;
+                    }
+                }
+                let now = Local::now();
+                if let Some(store) = &self.store {
+                    let _ = store.mark_played(&id, now.timestamp());
+                }
+                if let Some(g) = self.games.iter_mut().find(|g| g.id == id) {
+                    g.last_played = Some(now);
+                }
+                match mins {
+                    0 => format!("Closed {title}"),
+                    1 => format!("Played {title} for 1 minute"),
+                    m if m < 120 => format!("Played {title} for {m} minutes"),
+                    m => format!("Played {title} for {} hours {} minutes", m / 60, m % 60),
+                }
+            }
+            launch::Status::Lost if stopped => format!("Closed {title}"),
+            launch::Status::Lost => format!("Lost track of {title}. If it opened in its own launcher, it's still running there."),
+        };
+        self.session = None;
+        self.set_overlay(false);
+        self.notice(&msg);
+        // Shelves were frozen while playing; catch up, and bring our window back.
+        let rescan = self.rescan();
+        Task::batch([rescan, window::latest().and_then(window::gain_focus)])
     }
 
     fn details(&mut self) {
@@ -579,6 +681,8 @@ impl App {
 
     fn subscription(&self) -> Subscription<Message> {
         let mut subs = vec![
+            // Only while a game is running.
+            if self.session.is_some() { time::every(Duration::from_secs(1)).map(|_| Message::Poll) } else { Subscription::none() },
             input::gamepads().map(Message::Pad),
             keyboard::listen().filter_map(|e| match e {
                 keyboard::Event::KeyPressed { key, repeat: false, .. } => input::map_key(&key).map(|a| Message::Key(a, true)),
@@ -597,7 +701,11 @@ impl App {
     }
 
     fn view(&self) -> iced::Element<'_, Message> {
-        ui::home::view(self)
+        if self.playing.get() > 0.005 {
+            iced::widget::stack![ui::home::view(self), ui::playing::view(self)].into()
+        } else {
+            ui::home::view(self)
+        }
     }
 }
 

@@ -1,24 +1,212 @@
-//! Starting games. M2: fire-and-forget. Process tracking and playtime come in M4.
+//! Starting games and knowing when they've closed.
+//!
+//! Every launch runs inside its own `systemd-run --user --scope`, so the whole process tree is
+//! tracked even when a launcher script exits early. Launchers that hand the game to an already
+//! running client (Steam, Heroic) are tracked by a `watch` pattern in the game's command line
+//! instead, e.g. Steam's `reaper SteamLaunch AppId=<id>`.
 
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
-use crate::sources::LaunchSpec;
+use crate::sources::{LaunchSpec, on_path};
 
-pub fn start(spec: &LaunchSpec) -> Result<(), String> {
-    match spec {
-        LaunchSpec::Command { program, args } => {
-            let mut child = Command::new(program)
-                .args(args)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .map_err(|e| format!("{program}: {e}"))?;
-            // Reap it so it doesn't linger as a zombie.
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
-            Ok(())
+/// How long a watched game may take to appear (Steam may update or sync first).
+const WATCH_GRACE: Duration = Duration::from_secs(180);
+/// An unwatched launch that exits sooner than this handed off to another launcher.
+const HANDOFF: Duration = Duration::from_secs(8);
+
+/// Command-line text that identifies a running game, per source. Data, not logic.
+pub fn watch_pattern(game_id: &str) -> Option<String> {
+    let (source, id) = game_id.split_once(':')?;
+    match source {
+        "steam" if id.chars().all(|c| c.is_ascii_digit()) => Some(format!("AppId={id}")),
+        // Heroic ids are `runner:appName`; legendary/gogdl/nile put the appName on their argv.
+        "heroic" => id.split_once(':').map(|(_, app)| app.to_owned()),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    Starting,
+    Running,
+    /// Closed after running; carries the play time.
+    Ended(Duration),
+    /// Never seen running (failed, or handed off to a launcher we can't follow).
+    Lost,
+}
+
+pub struct Session {
+    pub game_id: String,
+    pub title: String,
+    pub launched: Instant,
+    /// When the game was first seen running.
+    pub running_since: Option<Instant>,
+    pid: u32,
+    unit: Option<String>,
+    cgroup: Option<PathBuf>,
+    exited: Arc<AtomicBool>,
+    watch: Option<String>,
+    /// The player asked us to close it.
+    pub stopped: bool,
+}
+
+pub fn start(game_id: &str, title: &str, spec: &LaunchSpec) -> Result<Session, String> {
+    let LaunchSpec::Command { program, args } = spec;
+    let scoped = on_path("systemd-run");
+    let unit = scoped.then(|| unit_name(game_id));
+    let mut cmd = match &unit {
+        Some(u) => {
+            let mut c = Command::new("systemd-run");
+            c.args(["--user", "--scope", "--quiet", "--collect", &format!("--unit={u}"), "--"]).arg(program);
+            c
         }
+        None => Command::new(program),
+    };
+    let mut child = cmd
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("{program}: {e}"))?;
+    let pid = child.id();
+    let exited = Arc::new(AtomicBool::new(false));
+    let flag = exited.clone();
+    // Reap it so it doesn't linger as a zombie.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+        flag.store(true, Ordering::Relaxed);
+    });
+    Ok(Session {
+        game_id: game_id.to_owned(),
+        title: title.to_owned(),
+        launched: Instant::now(),
+        running_since: None,
+        pid,
+        unit,
+        cgroup: None,
+        exited,
+        watch: watch_pattern(game_id),
+        stopped: false,
+    })
+}
+
+fn unit_name(game_id: &str) -> String {
+    let safe: String = game_id.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).take(48).collect();
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    format!("superman-{safe}-{ts}")
+}
+
+impl Session {
+    /// Check on the game. Cheap enough to call once a second.
+    pub fn poll(&mut self) -> Status {
+        let now = Instant::now();
+        let scope_alive = self.scope_alive();
+        let watched = self.watch.as_deref().map(|p| !find(p).is_empty());
+
+        let alive = match watched {
+            // A watched game is judged only by the pattern: the scope may hold a whole Steam client.
+            Some(seen) => seen,
+            None => scope_alive,
+        };
+        if alive {
+            let quick = self.watch.is_none() && now - self.launched < Duration::from_millis(1500);
+            if self.running_since.is_none() && !quick {
+                self.running_since = Some(now);
+            }
+            return if self.running_since.is_some() { Status::Running } else { Status::Starting };
+        }
+        match self.running_since {
+            Some(t) => Status::Ended(now - t),
+            None if self.watch.is_some() && now - self.launched < WATCH_GRACE => Status::Starting,
+            None if self.watch.is_none() && now - self.launched < HANDOFF && scope_alive => Status::Starting,
+            None => Status::Lost,
+        }
+    }
+
+    fn scope_alive(&mut self) -> bool {
+        if self.cgroup.is_none() {
+            self.cgroup = self.resolve_cgroup();
+        }
+        match &self.cgroup {
+            Some(cg) => std::fs::read_to_string(cg.join("cgroup.procs")).is_ok_and(|s| !s.trim().is_empty()),
+            None => !self.exited.load(Ordering::Relaxed),
+        }
+    }
+
+    fn resolve_cgroup(&self) -> Option<PathBuf> {
+        let unit = self.unit.as_ref()?;
+        let from_proc = std::fs::read_to_string(format!("/proc/{}/cgroup", self.pid))
+            .ok()
+            .and_then(|s| s.lines().find_map(|l| l.strip_prefix("0::").map(str::to_owned)))
+            .filter(|p| p.contains(unit.as_str()));
+        let path = from_proc.or_else(|| {
+            let out = Command::new("systemctl")
+                .args(["--user", "show", "-p", "ControlGroup", "--value", &format!("{unit}.scope")])
+                .output()
+                .ok()?;
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+            (!s.is_empty()).then_some(s)
+        })?;
+        Some(PathBuf::from("/sys/fs/cgroup").join(path.trim_start_matches('/')))
+    }
+
+    /// Ask the game to close. Watched games get SIGTERM on the matched processes (never the
+    /// launcher client); scoped games have their whole scope stopped.
+    pub fn stop(&mut self) {
+        self.stopped = true;
+        if let Some(p) = &self.watch {
+            for pid in find(p) {
+                let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).status();
+            }
+        } else if let Some(u) = &self.unit {
+            let _ = Command::new("systemctl").args(["--user", "stop", &format!("{u}.scope")]).status();
+        } else {
+            let _ = Command::new("kill").args(["-TERM", &self.pid.to_string()]).status();
+        }
+    }
+}
+
+/// Pids whose command line contains `pattern` (excluding launcher hand-off commands).
+fn find(pattern: &str) -> Vec<u32> {
+    let me = std::process::id();
+    let Ok(dir) = std::fs::read_dir("/proc") else { return Vec::new() };
+    dir.flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|&pid| pid != me)
+        .filter(|pid| {
+            let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else { return false };
+            let cmd = String::from_utf8_lossy(&raw).replace('\0', " ");
+            matches_cmd(&cmd, pattern)
+        })
+        .collect()
+}
+
+fn matches_cmd(cmd: &str, pattern: &str) -> bool {
+    if cmd.contains("steam://") || cmd.contains("heroic://") {
+        return false;
+    }
+    cmd.split(' ').any(|w| w == pattern || w.ends_with(&format!("/{pattern}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn patterns() {
+        assert_eq!(watch_pattern("steam:367520").as_deref(), Some("AppId=367520"));
+        assert_eq!(watch_pattern("heroic:legendary:Fortnite").as_deref(), Some("Fortnite"));
+        assert_eq!(watch_pattern("desktop:wesnoth"), None);
+        let reaper = "/home/u/.steam/ubuntu12_32/reaper SteamLaunch AppId=367520 -- /x/hollow_knight.x86_64 ";
+        assert!(matches_cmd(reaper, "AppId=367520"));
+        assert!(!matches_cmd(reaper, "AppId=36752"));
+        assert!(!matches_cmd("steam steam://rungameid/367520 ", "AppId=367520"));
+        assert!(matches_cmd("legendary launch Fortnite --wine x ", "Fortnite"));
+        assert!(!matches_cmd("heroic --no-gui heroic://launch/legendary/Fortnite ", "Fortnite"));
     }
 }

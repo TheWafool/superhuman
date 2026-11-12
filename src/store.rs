@@ -185,6 +185,13 @@ impl Store {
         self.conn.execute("UPDATE games SET last_played = ?2 WHERE id = ?1", params![id, unix])?;
         Ok(())
     }
+
+    /// Add a tracked session. Launchers that count playtime themselves (Steam) catch up through
+    /// the MAX() in `apply`, so this never double counts.
+    pub fn add_playtime(&self, id: &str, minutes: u32) -> rusqlite::Result<()> {
+        self.conn.execute("UPDATE games SET minutes_played = minutes_played + ?2 WHERE id = ?1", params![id, minutes])?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

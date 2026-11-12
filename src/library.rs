@@ -274,7 +274,7 @@ pub fn demo() -> Vec<Game> {
             source: s,
             source_id: i.to_string(),
             title: t.into(),
-            launch: LaunchSpec::cmd("true", Vec::<String>::new()),
+            launch: LaunchSpec::cmd("sleep", ["600"]),
             minutes_played: m,
             last_played: d.map(|d| now - d * day),
             steam_appid: None,

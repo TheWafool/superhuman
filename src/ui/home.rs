@@ -134,7 +134,9 @@ fn top_bar(app: &App) -> Element<'_, Message> {
 fn hero(app: &App) -> Element<'_, Message> {
     let game = &app.games[app.selected];
 
-    let mut meta = row![text(game.last_played_label()).size(size::S).color(alpha(PAPER, 0.9))].spacing(36);
+    let running = app.session.as_ref().is_some_and(|s| s.game_id == game.id);
+    let first = if running { "Running now".to_owned() } else { game.last_played_label() };
+    let mut meta = row![text(first).size(size::S).font(body(if running { Weight::Bold } else { Weight::Normal })).color(alpha(PAPER, 0.9))].spacing(36);
     if let Some(p) = game.playtime_label() {
         meta = meta.push(text(p).size(size::S).color(HAZE));
     }
@@ -142,7 +144,7 @@ fn hero(app: &App) -> Element<'_, Message> {
 
     let hero_f = app.hero_focus.get();
     let buttons = row![
-        hero_button("Play", matches!(app.focus, Focus::Hero(0)), hero_f),
+        hero_button(if running { "Now playing" } else { "Play" }, matches!(app.focus, Focus::Hero(0)), hero_f),
         hero_button("Details", matches!(app.focus, Focus::Hero(1)), hero_f),
     ]
     .spacing(20);

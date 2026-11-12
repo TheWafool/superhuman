@@ -2,6 +2,7 @@
 //!
 //! `SUPERMAN_KEYS="r,r,d,a"` presses actions (u/d/l/r, a=confirm, b=back, x, y, m, lb, rb).
 //! `SUPERMAN_SHOT=/path.png` saves a screenshot after the keys, then exits.
+//! `SUPERMAN_SHOT_DELAY=ms` waits longer before the screenshot (default 900).
 
 use std::time::Duration;
 
@@ -27,7 +28,8 @@ pub fn boot() -> Task<Message> {
             tokio::time::sleep(Duration::from_millis(220)).await;
         }
         if shot {
-            tokio::time::sleep(Duration::from_millis(900)).await;
+            let ms = std::env::var("SUPERMAN_SHOT_DELAY").ok().and_then(|v| v.parse().ok()).unwrap_or(900);
+            tokio::time::sleep(Duration::from_millis(ms)).await;
             let _ = out.send(Message::DevShoot).await;
         }
     }))
