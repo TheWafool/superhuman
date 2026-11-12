@@ -30,7 +30,27 @@ You can also use a mouse: click to focus, click again to open, scroll, and right
 
 Steam games get their art from Steam. For everything else, add a free [SteamGridDB](https://www.steamgriddb.com/profile/preferences/api) API key in Settings, or in `~/.config/superhuman/config.toml` (see `config.example.toml`). The key stays on your computer.
 
-## Build
+## Install
+
+Downloads are on the [Releases page](https://github.com/TheWafool/superhuman/releases/latest).
+
+**Arch / CachyOS / Manjaro:**
+
+```sh
+mkdir superhuman && cd superhuman
+curl -LO https://github.com/TheWafool/superhuman/releases/latest/download/PKGBUILD
+makepkg -si
+```
+
+**Debian / Ubuntu / Mint:** download the `.deb`, then `sudo apt install ./superhuman_*.deb`
+
+**Fedora / openSUSE:** download the `.rpm`, then `sudo dnf install ./superhuman-*.rpm`
+
+**Windows:** download `superhuman-windows.zip`, unzip it and run `superhuman.exe`.
+
+**macOS:** download `Superhuman.dmg` and drag the app to Applications.
+
+## Build from source
 
 ```sh
 cargo build --release
