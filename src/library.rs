@@ -1,38 +1,90 @@
-//! Placeholder library for M1. Replaced by real source scanners in M2.
+//! Game model, cross-source dedup, and home-screen shelves.
 
-use chrono::{DateTime, Duration, Local};
+use std::collections::HashMap;
+
+use chrono::{DateTime, Local, TimeZone};
 use iced::Color;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use crate::sources::LaunchSpec;
+use crate::store::Row;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
     Steam,
     Heroic,
     Lutris,
     Flatpak,
+    Desktop,
     Emulation,
     Prism,
 }
 
 impl Source {
+    /// Which copy wins when the same game is found in several places (lower = preferred).
+    fn priority(self) -> u8 {
+        match self {
+            Source::Steam => 0,
+            Source::Heroic => 1,
+            Source::Lutris => 2,
+            Source::Prism => 3,
+            Source::Emulation => 4,
+            Source::Flatpak => 5,
+            Source::Desktop => 6,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Source::Steam => "Steam",
             Source::Heroic => "Heroic",
             Source::Lutris => "Lutris",
             Source::Flatpak => "Flatpak",
+            Source::Desktop => "your system",
             Source::Emulation => "Emulation",
             Source::Prism => "Prism Launcher",
         }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Source::Steam => "steam",
+            Source::Heroic => "heroic",
+            Source::Lutris => "lutris",
+            Source::Flatpak => "flatpak",
+            Source::Desktop => "desktop",
+            Source::Emulation => "emulation",
+            Source::Prism => "prism",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "steam" => Source::Steam,
+            "heroic" => Source::Heroic,
+            "lutris" => Source::Lutris,
+            "flatpak" => Source::Flatpak,
+            "desktop" => Source::Desktop,
+            "emulation" => Source::Emulation,
+            "prism" => Source::Prism,
+            _ => return None,
+        })
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Game {
+    /// Id of the preferred copy (`source:source_id`).
+    pub id: String,
     pub title: String,
     pub source: Source,
+    pub launch: LaunchSpec,
+    /// Other launchers that also have this game.
+    pub also_on: Vec<Source>,
     pub minutes_played: u32,
     pub last_played: Option<DateTime<Local>>,
     pub favorite: bool,
+    #[allow(dead_code)] // used for art in M3
+    pub steam_appid: Option<u32>,
     /// Stand-in for colours extracted from art (M3).
     pub ambient: Color,
     pub accent: Color,
@@ -43,7 +95,7 @@ impl Game {
         let Some(t) = self.last_played else { return "Never played".into() };
         let days = (Local::now() - t).num_days();
         match days {
-            0 => "Played today".into(),
+            ..=0 => "Played today".into(),
             1 => "Played yesterday".into(),
             d if d < 14 => format!("Played {d} days ago"),
             d if d < 60 => format!("Played {} weeks ago", d / 7),
@@ -59,6 +111,90 @@ impl Game {
             m => Some(format!("{} hours", m / 60)),
         }
     }
+
+    pub fn sources_label(&self) -> String {
+        let mut s = format!("via {}", self.source.label());
+        if !self.also_on.is_empty() {
+            let rest: Vec<_> = self.also_on.iter().map(|s| s.label()).collect();
+            s.push_str(&format!(", also on {}", rest.join(" and ")));
+        }
+        s
+    }
+}
+
+/// Normalised title for matching the same game across launchers.
+pub fn match_key(title: &str) -> String {
+    title
+        .to_lowercase()
+        .replace(['™', '®', '©'], "")
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect()
+}
+
+/// Colours derived from the title until real art lands (M3).
+fn placeholder_colors(title: &str) -> (Color, Color) {
+    let h = title.bytes().fold(2166136261u32, |h, b| (h ^ b as u32).wrapping_mul(16777619));
+    let hue = (h % 360) as f32;
+    (hsl(hue, 0.45, 0.22), hsl((hue + 25.0) % 360.0, 0.62, 0.55))
+}
+
+fn hsl(h: f32, s: f32, l: f32) -> Color {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = l - c / 2.0;
+    let (r, g, b) = match (h / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    Color::from_rgb(r + m, g + m, b + m)
+}
+
+/// Merge DB rows into one game per title, preferring the higher-priority source.
+pub fn from_rows(mut rows: Vec<Row>) -> Vec<Game> {
+    rows.retain(|r| !r.hidden);
+    rows.sort_by_key(|r| r.source.priority());
+    let mut by_key: HashMap<String, usize> = HashMap::new();
+    let mut games: Vec<Game> = Vec::new();
+    for r in rows {
+        let key = match r.steam_appid {
+            Some(id) => format!("steam{id}"),
+            None => match_key(&r.title),
+        };
+        let alt_key = match_key(&r.title);
+        let last = r.last_played.and_then(|t| Local.timestamp_opt(t, 0).single());
+        if let Some(&i) = by_key.get(&key).or_else(|| by_key.get(&alt_key)) {
+            let g = &mut games[i];
+            if g.source != r.source && !g.also_on.contains(&r.source) {
+                g.also_on.push(r.source);
+            }
+            g.minutes_played = g.minutes_played.max(r.minutes_played);
+            g.last_played = g.last_played.max(last);
+            g.favorite |= r.favorite;
+            continue;
+        }
+        let (ambient, accent) = placeholder_colors(&r.title);
+        by_key.insert(key, games.len());
+        by_key.insert(alt_key, games.len());
+        games.push(Game {
+            id: r.id,
+            title: r.title,
+            source: r.source,
+            launch: r.launch,
+            also_on: Vec::new(),
+            minutes_played: r.minutes_played,
+            last_played: last,
+            favorite: r.favorite,
+            steam_appid: r.steam_appid,
+            ambient,
+            accent,
+        });
+    }
+    games
 }
 
 /// A shelf on the home screen: a named filter + sort over the library.
@@ -66,15 +202,18 @@ pub struct ShelfDef {
     pub title: &'static str,
     pub filter: fn(&Game) -> bool,
     pub by_recent: bool,
+    pub limit: usize,
 }
 
 pub const SHELVES: &[ShelfDef] = &[
-    ShelfDef { title: "Continue playing", filter: |g| g.last_played.is_some(), by_recent: true },
-    ShelfDef { title: "Favourites", filter: |g| g.favorite, by_recent: false },
-    ShelfDef { title: "Steam", filter: |g| g.source == Source::Steam, by_recent: false },
-    ShelfDef { title: "Heroic", filter: |g| g.source == Source::Heroic, by_recent: false },
-    ShelfDef { title: "Lutris and Flatpak", filter: |g| matches!(g.source, Source::Lutris | Source::Flatpak | Source::Prism), by_recent: false },
-    ShelfDef { title: "Emulation", filter: |g| g.source == Source::Emulation, by_recent: false },
+    ShelfDef { title: "Continue playing", filter: |g| g.last_played.is_some(), by_recent: true, limit: 12 },
+    ShelfDef { title: "Favourites", filter: |g| g.favorite, by_recent: false, limit: usize::MAX },
+    ShelfDef { title: "Steam", filter: |g| g.source == Source::Steam, by_recent: false, limit: usize::MAX },
+    ShelfDef { title: "Heroic", filter: |g| g.source == Source::Heroic, by_recent: false, limit: usize::MAX },
+    ShelfDef { title: "Lutris", filter: |g| g.source == Source::Lutris, by_recent: false, limit: usize::MAX },
+    ShelfDef { title: "Emulation", filter: |g| g.source == Source::Emulation, by_recent: false, limit: usize::MAX },
+    ShelfDef { title: "Flatpak and system games", filter: |g| matches!(g.source, Source::Flatpak | Source::Desktop | Source::Prism), by_recent: false, limit: usize::MAX },
+    ShelfDef { title: "All games", filter: |_| true, by_recent: false, limit: usize::MAX },
 ];
 
 pub struct Shelf {
@@ -84,53 +223,98 @@ pub struct Shelf {
 }
 
 pub fn build_shelves(games: &[Game]) -> Vec<Shelf> {
-    SHELVES
-        .iter()
-        .map(|def| {
-            let mut idx: Vec<usize> = (0..games.len()).filter(|&i| (def.filter)(&games[i])).collect();
-            if def.by_recent {
-                idx.sort_by_key(|&i| std::cmp::Reverse(games[i].last_played));
-            } else {
-                idx.sort_by(|&a, &b| games[a].title.cmp(&games[b].title));
-            }
-            Shelf { title: def.title, games: idx }
-        })
-        .filter(|s| !s.games.is_empty())
-        .collect()
+    let mut out: Vec<Shelf> = Vec::new();
+    for def in SHELVES {
+        let mut idx: Vec<usize> = (0..games.len()).filter(|&i| (def.filter)(&games[i])).collect();
+        if def.by_recent {
+            idx.sort_by_key(|&i| std::cmp::Reverse(games[i].last_played));
+        } else {
+            idx.sort_by_cached_key(|&i| games[i].title.to_lowercase());
+        }
+        idx.truncate(def.limit);
+        // Skip empty shelves and ones identical to an earlier shelf (e.g. "All games" with one source).
+        let mut sorted = idx.clone();
+        sorted.sort_unstable();
+        let dup = out.iter().any(|s| {
+            let mut o = s.games.clone();
+            o.sort_unstable();
+            o == sorted
+        });
+        if !idx.is_empty() && !dup {
+            out.push(Shelf { title: def.title, games: idx });
+        }
+    }
+    out
 }
 
-pub fn fake() -> Vec<Game> {
-    let now = Local::now();
-    let ago = |d: i64| Some(now - Duration::days(d));
-    let c = |hex: u32| Color::from_rgb8((hex >> 16) as u8, (hex >> 8) as u8, hex as u8);
+/// Placeholder library for screenshots and UI work: `SUPERMAN_DEMO=1`.
+pub fn demo() -> Vec<Game> {
+    let now = Local::now().timestamp();
+    let day = 86_400;
     #[rustfmt::skip]
-    let rows: &[(&str, Source, u32, Option<DateTime<Local>>, bool, u32, u32)] = &[
-        ("Hades II",           Source::Steam,     2460, ago(0),   true,  0x5A1E3A, 0xE0654A),
-        ("Elden Ring",         Source::Steam,     6120, ago(2),   true,  0x3B3420, 0xD8B65C),
-        ("Celeste",            Source::Heroic,     840, ago(5),   false, 0x3A2156, 0xE46FA8),
-        ("Balatro",            Source::Steam,     1980, ago(1),   true,  0x1E3A4A, 0xE4483C),
-        ("Hollow Knight",      Source::Heroic,    2100, ago(21),  false, 0x1B2638, 0xB7C8E4),
-        ("Baldur's Gate 3",    Source::Steam,     9300, ago(40),  true,  0x2E2014, 0xC9943E),
-        ("Cyberpunk 2077",     Source::Heroic,    3480, ago(90),  false, 0x3A3A10, 0xF2E640),
-        ("Stardew Valley",     Source::Steam,     5400, ago(12),  false, 0x23401F, 0x8CCB5E),
-        ("Outer Wilds",        Source::Steam,      960, None,     false, 0x1C2C4A, 0xF09A3E),
-        ("Disco Elysium",      Source::Heroic,    1500, ago(200), false, 0x2C3A3A, 0xD9C7A0),
-        ("Diablo II",          Source::Lutris,     300, ago(30),  false, 0x3A1010, 0xC8442C),
-        ("Battle for Wesnoth", Source::Flatpak,    120, None,     false, 0x2A2E1A, 0xC0A86A),
-        ("Minecraft",          Source::Prism,     8800, ago(3),   false, 0x24381C, 0x7BBE4E),
-        ("Super Metroid",      Source::Emulation,  420, ago(60),  true,  0x2A1438, 0xE24A6A),
-        ("Chrono Trigger",     Source::Emulation,  900, None,     false, 0x1A2A44, 0xE8C25A),
-        ("Metroid Prime",      Source::Emulation,  610, ago(8),   false, 0x2A1A10, 0xF07A2A),
+    let rows: &[(&str, Source, u32, Option<i64>, bool)] = &[
+        ("Hades II", Source::Steam, 2460, Some(0), true),
+        ("Elden Ring", Source::Steam, 6120, Some(2), true),
+        ("Celeste", Source::Heroic, 840, Some(5), false),
+        ("Balatro", Source::Steam, 1980, Some(1), true),
+        ("Hollow Knight", Source::Heroic, 2100, Some(21), false),
+        ("Baldur's Gate 3", Source::Steam, 9300, Some(40), true),
+        ("Stardew Valley", Source::Steam, 5400, Some(12), false),
+        ("Outer Wilds", Source::Steam, 960, None, false),
+        ("Diablo II", Source::Lutris, 300, Some(30), false),
+        ("Battle for Wesnoth", Source::Flatpak, 120, None, false),
+        ("Minecraft", Source::Prism, 8800, Some(3), false),
+        ("Super Metroid", Source::Emulation, 420, Some(60), true),
+        ("Metroid Prime", Source::Emulation, 610, Some(8), false),
     ];
-    rows.iter()
-        .map(|&(t, s, m, lp, f, a, b)| Game {
-            title: t.into(),
+    let rows = rows
+        .iter()
+        .enumerate()
+        .map(|(i, &(t, s, m, d, f))| Row {
+            id: format!("demo:{i}"),
             source: s,
+            source_id: i.to_string(),
+            title: t.into(),
+            launch: LaunchSpec::cmd("true", Vec::<String>::new()),
             minutes_played: m,
-            last_played: lp,
+            last_played: d.map(|d| now - d * day),
+            steam_appid: None,
             favorite: f,
-            ambient: c(a),
-            accent: c(b),
+            hidden: false,
         })
-        .collect()
+        .collect();
+    from_rows(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(src: Source, title: &str, appid: Option<u32>) -> Row {
+        Row {
+            id: format!("{}:{title}", src.as_str()),
+            source: src,
+            source_id: title.into(),
+            title: title.into(),
+            launch: LaunchSpec::cmd("x", Vec::<String>::new()),
+            minutes_played: 0,
+            last_played: None,
+            steam_appid: appid,
+            favorite: false,
+            hidden: false,
+        }
+    }
+
+    #[test]
+    fn dedups_across_sources() {
+        let games = from_rows(vec![
+            row(Source::Lutris, "Hollow Knight™", None),
+            row(Source::Steam, "Hollow Knight", Some(367520)),
+            row(Source::Desktop, "Wesnoth", None),
+        ]);
+        assert_eq!(games.len(), 2);
+        let hk = games.iter().find(|g| g.title == "Hollow Knight").unwrap();
+        assert_eq!(hk.source, Source::Steam);
+        assert_eq!(hk.also_on, vec![Source::Lutris]);
+    }
 }

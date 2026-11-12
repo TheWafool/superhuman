@@ -1,10 +1,14 @@
 mod anim;
 mod devtools;
 mod input;
+mod launch;
 mod library;
+mod sources;
+mod store;
 mod theme;
 mod ui;
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Local};
@@ -41,6 +45,8 @@ pub enum Message {
     Frame(Instant),
     Tick,
     Resized(Size),
+    Rescan,
+    Scanned(Arc<Vec<sources::ScanResult>>),
     DevShoot,
     DevShot(window::Screenshot),
 }
@@ -59,6 +65,8 @@ struct Held {
 }
 
 pub struct App {
+    store: Option<store::Store>,
+    scanning: bool,
     pub games: Vec<Game>,
     pub shelves: Vec<Shelf>,
     pub focus: Focus,
@@ -89,29 +97,40 @@ pub struct App {
 
 impl App {
     fn new() -> (Self, Task<Message>) {
-        (Self::init(), devtools::boot())
+        let mut app = Self::init();
+        let scan = app.rescan();
+        (app, Task::batch([scan, devtools::boot()]))
     }
 
     fn init() -> Self {
-        let games = library::fake();
-        let shelves = library::build_shelves(&games);
-        let selected = shelves.first().and_then(|s| s.games.first()).copied().unwrap_or(0);
-        let ambient = games.get(selected).map(|g| (g.ambient, g.accent)).unwrap_or((theme::NIGHT, theme::DUSK));
-        let mut grow: Vec<Vec<Blend>> = shelves.iter().map(|s| vec![Blend::new(0.0); s.games.len()]).collect();
-        if let Some(first) = grow.first_mut().and_then(|r| r.first_mut()) {
-            first.snap(1.0);
-        }
-        Self {
+        // Cached library first, so the first frame already shows games.
+        let (store, games) = if std::env::var_os("SUPERMAN_DEMO").is_some() {
+            (None, library::demo())
+        } else {
+            match store::Store::open(&store::default_path()) {
+                Ok(s) => {
+                    let games = library::from_rows(s.load().unwrap_or_default());
+                    (Some(s), games)
+                }
+                Err(e) => {
+                    eprintln!("library database unavailable: {e}");
+                    (None, Vec::new())
+                }
+            }
+        };
+        let mut app = Self {
+            store,
+            scanning: false,
             focus: Focus::Shelf,
             row: 0,
-            cols: vec![0; shelves.len()],
-            selected,
-            scroll_x: vec![Spring::new(0.0); shelves.len()],
+            cols: Vec::new(),
+            selected: 0,
+            scroll_x: Vec::new(),
             scroll_y: Spring::new(0.0),
-            grow,
+            grow: Vec::new(),
             hero_focus: Blend::new(0.0),
-            ambient_from: ambient,
-            ambient_to: ambient,
+            ambient_from: (theme::NIGHT, theme::DUSK),
+            ambient_to: (theme::NIGHT, theme::DUSK),
             ambient_t: Blend::new(1.0),
             pad: PadKind::Keyboard,
             held: None,
@@ -120,9 +139,67 @@ impl App {
             reduce_motion: std::env::var_os("SUPERMAN_REDUCE_MOTION").is_some(),
             toast: None,
             clock: Local::now(),
-            games,
-            shelves,
+            games: Vec::new(),
+            shelves: Vec::new(),
+        };
+        app.set_library(games);
+        app.snap_animations();
+        app
+    }
+
+    /// Replace the library, keeping focus on the same game if it still exists.
+    fn set_library(&mut self, games: Vec<Game>) {
+        let keep = self.games.get(self.selected).map(|g| g.id.clone());
+        let keep_row = self.shelves.get(self.row).map(|s| s.title);
+        self.games = games;
+        self.shelves = library::build_shelves(&self.games);
+        let n = self.shelves.len();
+        self.cols = vec![0; n];
+        self.scroll_x = vec![Spring::new(0.0); n];
+        self.grow = self.shelves.iter().map(|s| vec![Blend::new(0.0); s.games.len()]).collect();
+        self.row = keep_row.and_then(|t| self.shelves.iter().position(|s| s.title == t)).unwrap_or(0).min(n.saturating_sub(1));
+        if let Some(id) = keep {
+            if let Some(gi) = self.games.iter().position(|g| g.id == id) {
+                let in_row = |r: usize| self.shelves[r].games.iter().position(|&g| g == gi);
+                if let Some(c) = self.shelves.get(self.row).and_then(|_| in_row(self.row)) {
+                    self.cols[self.row] = c;
+                } else if let Some((r, c)) = (0..n).find_map(|r| in_row(r).map(|c| (r, c))) {
+                    self.row = r;
+                    self.cols[r] = c;
+                }
+            }
         }
+        for r in 0..n {
+            self.scroll_x[r].snap(self.cols[r] as f32 * (theme::cover::W + theme::cover::GAP));
+        }
+        self.selected = usize::MAX; // force sync_focus to refresh the hero
+        self.sync_focus();
+        for (r, row) in self.grow.iter_mut().enumerate() {
+            for (c, g) in row.iter_mut().enumerate() {
+                g.snap(if self.focus == Focus::Shelf && r == self.row && c == self.cols[r] { 1.0 } else { 0.0 });
+            }
+        }
+    }
+
+    pub fn scanning(&self) -> bool {
+        self.scanning
+    }
+
+    fn snap_animations(&mut self) {
+        self.ambient_from = self.ambient_to;
+        self.ambient_t.snap(1.0);
+        self.scroll_y.snap(self.scroll_y.target);
+    }
+
+    fn rescan(&mut self) -> Task<Message> {
+        if self.store.is_none() || self.scanning {
+            return Task::none();
+        }
+        self.scanning = true;
+        Task::perform(
+            async { tokio::task::spawn_blocking(sources::scan_all).await.unwrap_or_default() },
+            |r| Message::Scanned(Arc::new(r)),
+        )
     }
 
     /// Current blended (ambient, accent) colours of the background.
@@ -157,6 +234,25 @@ impl App {
             Message::Key(a, false) => self.release(a),
             Message::Frame(now) => self.frame(now),
             Message::Tick => self.clock = Local::now(),
+            Message::Rescan => return self.rescan(),
+            Message::Scanned(results) => {
+                self.scanning = false;
+                for r in results.iter() {
+                    if let Err(e) = &r.games {
+                        eprintln!("{} scan failed: {e}", r.source.label());
+                    }
+                }
+                if let Some(store) = &mut self.store {
+                    match store.apply(&results) {
+                        Ok(true) => {
+                            let games = library::from_rows(store.load().unwrap_or_default());
+                            self.set_library(games);
+                        }
+                        Ok(false) => {}
+                        Err(e) => eprintln!("saving library failed: {e}"),
+                    }
+                }
+            }
             Message::DevShoot => return devtools::shoot(),
             Message::DevShot(s) => return devtools::save(s),
             Message::Resized(logical) => {
@@ -268,7 +364,7 @@ impl App {
                 g.set(if on_shelf && r == self.row && c == col { 1.0 } else { 0.0 });
             }
         }
-        let game = self.shelves[self.row].games[self.cols[self.row]];
+        let Some(&game) = self.shelves.get(self.row).and_then(|s| s.games.get(self.cols[self.row])) else { return };
         if game != self.selected {
             self.selected = game;
             let cur = self.ambient();
@@ -281,8 +377,19 @@ impl App {
     }
 
     fn play(&mut self) {
-        let t = self.games[self.selected].title.clone();
-        self.notice(&format!("{t} is a placeholder. Launching arrives in milestone 4."));
+        let Some(g) = self.games.get(self.selected) else { return };
+        let title = g.title.clone();
+        match launch::start(&g.launch) {
+            Ok(()) => {
+                let now = Local::now();
+                if let Some(store) = &self.store {
+                    let _ = store.mark_played(&g.id, now.timestamp());
+                }
+                self.games[self.selected].last_played = Some(now);
+                self.notice(&format!("Starting {title}"));
+            }
+            Err(e) => self.notice(&format!("{title} didn't start: {e}")),
+        }
     }
 
     fn details(&mut self) {
@@ -303,6 +410,8 @@ impl App {
             }),
             window::resize_events().map(|(_, s)| Message::Resized(s)),
             time::every(Duration::from_secs(10)).map(|_| Message::Tick),
+            // Cheap: scanners only read a few local files.
+            time::every(Duration::from_secs(45)).map(|_| Message::Rescan),
         ];
         if self.animating() {
             subs.push(window::frames().map(Message::Frame));

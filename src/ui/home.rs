@@ -18,6 +18,9 @@ const HERO_H: f32 = 400.0;
 const FOOTER_H: f32 = 96.0;
 
 pub fn view(app: &App) -> Element<'_, Message> {
+    if app.games.get(app.selected).is_none() {
+        return empty(app);
+    }
     let (ambient, accent) = app.ambient();
 
     let background = Gradient::Linear(
@@ -254,5 +257,26 @@ fn toast(msg: &str) -> Element<'_, Message> {
     .align_x(alignment::Horizontal::Center)
     .align_y(alignment::Vertical::Bottom)
     .padding(iced::Padding { bottom: FOOTER_H + 24.0, ..Default::default() })
+    .into()
+}
+
+/// No games yet: say what to do, not how it feels.
+fn empty(app: &App) -> Element<'_, Message> {
+    let msg = if app.scanning() { "Looking for games" } else { "No games found yet" };
+    container(
+        column![
+            text(msg).size(size::XL).font(display(Weight::ExtraBold)),
+            text("Install a game in Steam, Heroic or Lutris, or add a Flatpak game. It shows up here on its own.")
+                .size(size::S)
+                .color(HAZE)
+                .width(760),
+        ]
+        .spacing(20),
+    )
+    .width(Fill)
+    .height(Fill)
+    .padding(MARGIN)
+    .align_y(alignment::Vertical::Center)
+    .style(|_| container::Style { background: Some(NIGHT.into()), text_color: Some(PAPER), ..Default::default() })
     .into()
 }
