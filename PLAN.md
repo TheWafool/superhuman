@@ -27,7 +27,7 @@ Non-goals (v1): a store, friends/chat, cloud saves of our own, achievements sync
 
 | Concern | Choice | Why |
 |---|---|---|
-| UI | **iced 0.13** (wgpu renderer) + custom widgets | Pure Rust, GPU, Elm-style state fits focus navigation; async tasks built in |
+| UI | **iced 0.14** (wgpu renderer) + custom widgets | Pure Rust, GPU, Elm-style state fits focus navigation; async tasks built in |
 | Gamepad | **gilrs** | Xbox/PS/Switch/Steam Deck mappings, hotplug, rumble |
 | Async / IO | **tokio**, **reqwest** (rustls) | Art + metadata fetches, all off the UI thread |
 | Storage | **rusqlite** (bundled) | Library, metadata, playtime; single file in `$XDG_DATA_HOME` |
