@@ -139,7 +139,7 @@ mod tests {
         assert_eq!(k.key_at(k.row, k.col), Key::Shift);
         k.press();
         k.up();
-        k.press(); // 'Z'
-        assert_eq!(k.text, "qZ");
+        k.press(); // 'X' (above the middle of Shift)
+        assert_eq!(k.text, "qX");
     }
 }
