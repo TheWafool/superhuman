@@ -3,8 +3,9 @@
 use iced::border::Border;
 use iced::font::Weight;
 use iced::gradient::Linear;
-use iced::widget::{Space, column, container, pin, row, stack, text};
-use iced::{Background, Color, Degrees, Element, Fill, Gradient, Point, Shadow, Vector, alignment};
+use iced::widget::image::{FilterMethod, Handle};
+use iced::widget::{Space, column, container, image, pin, row, stack, text};
+use iced::{Background, Color, ContentFit, Degrees, Element, Fill, Gradient, Point, Shadow, Shrink, Vector, alignment};
 
 use crate::input::Action;
 use crate::theme::{self, DUSK, HAZE, MARGIN, MARQUEE, NIGHT, PAPER, alpha, body, cover, display, size};
@@ -16,6 +17,11 @@ const LABEL_H: f32 = 48.0;
 const COVER_BAND: f32 = cover::H * (1.0 + cover::FOCUS_GROW);
 const HERO_H: f32 = 400.0;
 const FOOTER_H: f32 = 96.0;
+/// Sharp hero art height (art is ~3.1:1, designed against a 1920-wide canvas).
+const HERO_ART_H: f32 = 620.0;
+const LOGO_H: f32 = 128.0;
+/// The shelf fade ends at the same darkness as the footer, so there's no seam.
+const FOOTER_DIM: f32 = 0.8;
 
 pub fn view(app: &App) -> Element<'_, Message> {
     if app.games.get(app.selected).is_none() {
@@ -37,7 +43,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         footer(app),
     ];
 
-    let mut layers = stack![content, top_bar(app)];
+    let mut layers = stack![art_layers(app), content, top_bar(app)];
     if let Some((msg, _)) = &app.toast {
         layers = layers.push(toast(msg));
     }
@@ -51,6 +57,56 @@ pub fn view(app: &App) -> Element<'_, Message> {
             ..Default::default()
         })
         .into()
+}
+
+/// Blurred backdrop + sharp hero art for the focused game, crossfading from the previous one,
+/// under scrims that keep text legible.
+fn art_layers(app: &App) -> Element<'_, Message> {
+    let t = app.fade();
+    let mut layers = stack![].width(Fill).height(Fill);
+    for (gi, opacity) in [(app.prev_selected, 1.0 - t), (Some(app.selected), t)] {
+        if opacity <= 0.01 {
+            continue;
+        }
+        let Some(art) = gi.and_then(|gi| app.games.get(gi)).and_then(|g| app.art.get(&g.id)) else { continue };
+        if let Some(b) = &art.backdrop {
+            layers = layers.push(
+                image(Handle::from_path(b))
+                    .width(Fill)
+                    .height(Fill)
+                    .content_fit(ContentFit::Cover)
+                    .filter_method(FilterMethod::Linear)
+                    .opacity(opacity),
+            );
+        }
+        if let Some(h) = &art.hero {
+            layers = layers.push(
+                image(Handle::from_path(h)).width(Fill).height(HERO_ART_H).content_fit(ContentFit::Cover).opacity(opacity),
+            );
+        }
+    }
+    // Darken toward the shelves, and behind the logo/text on the left.
+    let down = Gradient::Linear(
+        Linear::new(Degrees(180.0))
+            .add_stop(0.0, alpha(NIGHT, 0.45))
+            .add_stop(0.12, alpha(NIGHT, 0.1))
+            .add_stop(0.3, alpha(NIGHT, 0.15))
+            .add_stop(0.6, alpha(NIGHT, 0.72))
+            .add_stop(1.0, alpha(NIGHT, 0.9)),
+    );
+    let side = Gradient::Linear(
+        Linear::new(Degrees(90.0))
+            .add_stop(0.0, alpha(NIGHT, 0.7))
+            .add_stop(0.4, alpha(NIGHT, 0.25))
+            .add_stop(0.7, alpha(NIGHT, 0.0)),
+    );
+    for g in [down, side] {
+        layers = layers.push(container(Space::new()).width(Fill).height(Fill).style(move |_| container::Style {
+            background: Some(Background::Gradient(g)),
+            ..Default::default()
+        }));
+    }
+    layers.into()
 }
 
 fn top_bar(app: &App) -> Element<'_, Message> {
@@ -82,7 +138,7 @@ fn hero(app: &App) -> Element<'_, Message> {
     if let Some(p) = game.playtime_label() {
         meta = meta.push(text(p).size(size::S).color(HAZE));
     }
-    meta = meta.push(text(format!("via {}", game.source.label())).size(size::S).color(HAZE));
+    meta = meta.push(text(game.sources_label()).size(size::S).color(HAZE));
 
     let hero_f = app.hero_focus.get();
     let buttons = row![
@@ -91,15 +147,23 @@ fn hero(app: &App) -> Element<'_, Message> {
     ]
     .spacing(20);
 
-    // Stand-in for logo art (M3): the title set large in the display face.
-    let title = text(&game.title)
-        .size(size::XXL)
-        .font(display(Weight::ExtraBold))
-        .line_height(1.0)
-        .width(1100);
+    // Logo art when we have it; otherwise the title set large in the display face.
+    let logo = app.art.get(&game.id).and_then(|a| a.logo.as_ref());
+    let title: Element<'_, Message> = match logo {
+        Some(path) => container(
+            image(Handle::from_path(path)).height(LOGO_H).width(Shrink).content_fit(ContentFit::Contain),
+        )
+        .max_width(600)
+        .height(LOGO_H)
+        .align_y(alignment::Vertical::Bottom)
+        .into(),
+        None => text(&game.title).size(size::XXL).font(display(Weight::ExtraBold)).line_height(1.0).width(1100).into(),
+    };
 
-    container(column![title, Space::new().height(22), meta, Space::new().height(36), buttons])
-        .padding(iced::Padding { top: 112.0, left: MARGIN, right: MARGIN, bottom: 0.0 })
+    container(column![title, Space::new().height(18), meta, Space::new().height(28), buttons])
+        .height(Fill)
+        .align_y(alignment::Vertical::Bottom)
+        .padding(iced::Padding { top: 0.0, left: MARGIN, right: MARGIN, bottom: 44.0 })
         .into()
 }
 
@@ -168,16 +232,26 @@ fn cover_tile(app: &App, game: usize, w: f32, h: f32, focus: f32, dim: f32) -> E
         .line_height(1.05)
         .color(PAPER);
 
-    let art = container(title)
-        .width(w)
-        .height(h)
-        .padding(18.0)
-        .align_y(alignment::Vertical::Bottom)
-        .style(move |_| container::Style {
-            background: Some(Background::Gradient(fill)),
-            border: Border { radius: cover::RADIUS.into(), ..Default::default() },
-            ..Default::default()
-        });
+    let art: Element<'_, Message> = match app.art.get(&g.id).and_then(|a| a.cover.as_ref()) {
+        Some(path) => image(Handle::from_path(path))
+            .width(w)
+            .height(h)
+            .content_fit(ContentFit::Cover)
+            .border_radius(cover::RADIUS)
+            .into(),
+        // Generated fallback: never a stretched icon.
+        None => container(title)
+            .width(w)
+            .height(h)
+            .padding(18.0)
+            .align_y(alignment::Vertical::Bottom)
+            .style(move |_| container::Style {
+                background: Some(Background::Gradient(fill)),
+                border: Border { radius: cover::RADIUS.into(), ..Default::default() },
+                ..Default::default()
+            })
+            .into(),
+    };
 
     let overlay = container(Space::new()).width(w).height(h).style(move |_| container::Style {
         background: Some(scrim.into()),
@@ -197,7 +271,7 @@ fn cover_tile(app: &App, game: usize, w: f32, h: f32, focus: f32, dim: f32) -> E
 /// Fades the next shelf into the footer so it reads as "more below", not as clipped.
 fn bottom_fade<'a>() -> Element<'a, Message> {
     let fade = Gradient::Linear(
-        Linear::new(Degrees(180.0)).add_stop(0.0, alpha(NIGHT, 0.0)).add_stop(1.0, NIGHT),
+        Linear::new(Degrees(180.0)).add_stop(0.0, alpha(NIGHT, 0.0)).add_stop(1.0, alpha(NIGHT, FOOTER_DIM)),
     );
     container(
         container(Space::new()).width(Fill).height(110).style(move |_| container::Style {
@@ -223,7 +297,13 @@ fn footer(app: &App) -> Element<'_, Message> {
                 .align_y(alignment::Vertical::Center),
         );
     }
-    container(r).height(FOOTER_H).padding([0.0, MARGIN]).align_y(alignment::Vertical::Center).into()
+    container(r)
+        .width(Fill)
+        .height(FOOTER_H)
+        .padding([0.0, MARGIN])
+        .align_y(alignment::Vertical::Center)
+        .style(|_| container::Style { background: Some(alpha(NIGHT, FOOTER_DIM).into()), ..Default::default() })
+        .into()
 }
 
 fn glyph(label: &str) -> Element<'_, Message> {

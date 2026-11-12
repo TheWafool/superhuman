@@ -83,7 +83,6 @@ pub struct Game {
     pub minutes_played: u32,
     pub last_played: Option<DateTime<Local>>,
     pub favorite: bool,
-    #[allow(dead_code)] // used for art in M3
     pub steam_appid: Option<u32>,
     /// Stand-in for colours extracted from art (M3).
     pub ambient: Color,
@@ -139,7 +138,7 @@ fn placeholder_colors(title: &str) -> (Color, Color) {
     (hsl(hue, 0.45, 0.22), hsl((hue + 25.0) % 360.0, 0.62, 0.55))
 }
 
-fn hsl(h: f32, s: f32, l: f32) -> Color {
+pub fn hsl(h: f32, s: f32, l: f32) -> Color {
     let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
     let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
     let m = l - c / 2.0;

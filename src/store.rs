@@ -1,10 +1,11 @@
 //! The library database: one row per (source, game). Dedup happens at load time.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use rusqlite::{Connection, params};
 
+use crate::art::Art;
 use crate::library::Source;
 use crate::sources::{LaunchSpec, ScanResult};
 
@@ -49,6 +50,14 @@ impl Store {
                 steam_appid INTEGER,
                 favorite INTEGER NOT NULL DEFAULT 0,
                 hidden INTEGER NOT NULL DEFAULT 0
+             );
+             DROP TABLE IF EXISTS art;
+             CREATE TABLE IF NOT EXISTS art_v2 (
+                game_id TEXT PRIMARY KEY,
+                cover TEXT, hero TEXT, logo TEXT, backdrop TEXT,
+                ambient INTEGER, accent INTEGER,
+                fetched_at INTEGER NOT NULL,
+                with_key INTEGER NOT NULL DEFAULT 0
              );",
         )?;
         Ok(Self { conn })
@@ -136,6 +145,40 @@ impl Store {
         }
         tx.commit()?;
         Ok(changed > 0)
+    }
+
+    /// game_id → (art, fetched_at unix, fetched with a SteamGridDB key)
+    pub fn load_art(&self) -> rusqlite::Result<HashMap<String, (Art, i64, bool)>> {
+        let mut stmt = self.conn.prepare("SELECT game_id, cover, hero, logo, backdrop, ambient, accent, fetched_at, with_key FROM art_v2")?;
+        let p = |s: Option<String>| s.map(PathBuf::from).filter(|p| p.is_file());
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                (
+                    Art {
+                        cover: p(r.get(1)?),
+                        hero: p(r.get(2)?),
+                        logo: p(r.get(3)?),
+                        backdrop: p(r.get(4)?),
+                        ambient: r.get(5)?,
+                        accent: r.get(6)?,
+                    },
+                    r.get(7)?,
+                    r.get(8)?,
+                ),
+            ))
+        })?;
+        Ok(rows.flatten().collect())
+    }
+
+    pub fn save_art(&self, game_id: &str, art: &Art, with_key: bool) -> rusqlite::Result<()> {
+        let s = |p: &Option<PathBuf>| p.as_ref().map(|p| p.to_string_lossy().into_owned());
+        self.conn.execute(
+            "INSERT OR REPLACE INTO art_v2 (game_id, cover, hero, logo, backdrop, ambient, accent, fetched_at, with_key)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![game_id, s(&art.cover), s(&art.hero), s(&art.logo), s(&art.backdrop), art.ambient, art.accent, chrono::Utc::now().timestamp(), with_key],
+        )?;
+        Ok(())
     }
 
     pub fn mark_played(&self, id: &str, unix: i64) -> rusqlite::Result<()> {

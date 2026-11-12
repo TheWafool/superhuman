@@ -1,4 +1,6 @@
 mod anim;
+mod art;
+mod config;
 mod devtools;
 mod input;
 mod launch;
@@ -8,6 +10,8 @@ mod store;
 mod theme;
 mod ui;
 
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -47,6 +51,8 @@ pub enum Message {
     Resized(Size),
     Rescan,
     Scanned(Arc<Vec<sources::ScanResult>>),
+    ArtFetched(String, art::Art, bool),
+    Allocated(PathBuf, Result<iced::widget::image::Allocation, iced::widget::image::Error>),
     DevShoot,
     DevShot(window::Screenshot),
 }
@@ -66,6 +72,20 @@ struct Held {
 
 pub struct App {
     store: Option<store::Store>,
+    config: config::Config,
+    http: reqwest::Client,
+    /// game id → art on disk.
+    pub art: HashMap<String, art::Art>,
+    art_meta: HashMap<String, (i64, bool)>,
+    art_queue: VecDeque<art::Request>,
+    art_queued: HashSet<String>,
+    art_in_flight: usize,
+    /// Game whose art is fading out behind the selected one.
+    pub prev_selected: Option<usize>,
+    /// Decoded GPU textures kept warm, with a last-used tick for LRU eviction.
+    textures: HashMap<PathBuf, (Option<iced::widget::image::Allocation>, u64)>,
+    texture_tick: u64,
+    prewarmed_for: usize,
     scanning: bool,
     pub games: Vec<Game>,
     pub shelves: Vec<Shelf>,
@@ -99,7 +119,9 @@ impl App {
     fn new() -> (Self, Task<Message>) {
         let mut app = Self::init();
         let scan = app.rescan();
-        (app, Task::batch([scan, devtools::boot()]))
+        let art = app.queue_art();
+        let warm = app.prewarm();
+        (app, Task::batch([scan, art, warm, devtools::boot()]))
     }
 
     fn init() -> Self {
@@ -118,8 +140,26 @@ impl App {
                 }
             }
         };
+        let art_rows = store.as_ref().and_then(|s| s.load_art().ok()).unwrap_or_default();
+        let mut art = HashMap::new();
+        let mut art_meta = HashMap::new();
+        for (id, (a, at, key)) in art_rows {
+            art.insert(id.clone(), a);
+            art_meta.insert(id, (at, key));
+        }
         let mut app = Self {
             store,
+            config: config::load(),
+            http: art::client(),
+            art,
+            art_meta,
+            art_queue: VecDeque::new(),
+            art_queued: HashSet::new(),
+            art_in_flight: 0,
+            prev_selected: None,
+            textures: HashMap::new(),
+            texture_tick: 0,
+            prewarmed_for: usize::MAX,
             scanning: false,
             focus: Focus::Shelf,
             row: 0,
@@ -152,6 +192,11 @@ impl App {
         let keep = self.games.get(self.selected).map(|g| g.id.clone());
         let keep_row = self.shelves.get(self.row).map(|s| s.title);
         self.games = games;
+        for g in &mut self.games {
+            apply_colors(g, self.art.get(&g.id));
+        }
+        self.prev_selected = None;
+        self.prewarmed_for = usize::MAX;
         self.shelves = library::build_shelves(&self.games);
         let n = self.shelves.len();
         self.cols = vec![0; n];
@@ -181,6 +226,93 @@ impl App {
         }
     }
 
+    /// Queue art fetches for games that have none (or incomplete art worth retrying), in shelf order.
+    fn queue_art(&mut self) -> Task<Message> {
+        if self.store.is_none() {
+            return Task::none();
+        }
+        let now = chrono::Utc::now().timestamp();
+        let have_key = self.config.steamgriddb_api_key.is_some();
+        let order: Vec<usize> = self.shelves.iter().flat_map(|s| s.games.iter().copied()).collect();
+        for gi in order {
+            let g = &self.games[gi];
+            if self.art_queued.contains(&g.id) {
+                continue;
+            }
+            let needs = match (self.art.get(&g.id), self.art_meta.get(&g.id)) {
+                (Some(a), Some(&(at, with_key))) => {
+                    let incomplete = a.cover.is_none() || a.hero.is_none() || a.logo.is_none();
+                    incomplete && ((have_key && !with_key) || now - at > 3 * 86_400)
+                }
+                _ => true,
+            };
+            if needs {
+                self.art_queued.insert(g.id.clone());
+                self.art_queue.push_back(art::Request { game_id: g.id.clone(), title: g.title.clone(), steam_appid: g.steam_appid });
+            }
+        }
+        self.pump_art()
+    }
+
+    fn pump_art(&mut self) -> Task<Message> {
+        let mut tasks = Vec::new();
+        while self.art_in_flight < 4 {
+            let Some(req) = self.art_queue.pop_front() else { break };
+            self.art_in_flight += 1;
+            let id = req.game_id.clone();
+            let key = self.config.steamgriddb_api_key.clone();
+            let with_key = key.is_some();
+            tasks.push(Task::perform(art::fetch(self.http.clone(), key, req), move |a| Message::ArtFetched(id.clone(), a, with_key)));
+        }
+        Task::batch(tasks)
+    }
+
+    /// Decode and upload the textures near focus ahead of time, and let far-away ones go.
+    fn prewarm(&mut self) -> Task<Message> {
+        const KEEP: usize = 160;
+        if self.prewarmed_for == self.selected || self.shelves.is_empty() {
+            return Task::none();
+        }
+        self.prewarmed_for = self.selected;
+        let mut want: Vec<PathBuf> = Vec::new();
+        let row_games = &self.shelves[self.row].games;
+        let col = self.cols[self.row];
+        // Big art for the focused game and its neighbours.
+        for &gi in row_games.iter().skip(col.saturating_sub(2)).take(5) {
+            if let Some(a) = self.art.get(&self.games[gi].id) {
+                want.extend([&a.backdrop, &a.hero, &a.logo].into_iter().flatten().cloned());
+            }
+        }
+        // Covers on the rows around focus.
+        for r in self.row.saturating_sub(1)..(self.row + 3).min(self.shelves.len()) {
+            let c = self.cols[r];
+            for &gi in self.shelves[r].games.iter().skip(c.saturating_sub(3)).take(12) {
+                if let Some(p) = self.art.get(&self.games[gi].id).and_then(|a| a.cover.clone()) {
+                    want.push(p);
+                }
+            }
+        }
+        let mut tasks = Vec::new();
+        for path in want {
+            self.texture_tick += 1;
+            let tick = self.texture_tick;
+            if let Some(e) = self.textures.get_mut(&path) {
+                e.1 = tick;
+                continue;
+            }
+            self.textures.insert(path.clone(), (None, tick));
+            let handle = iced::widget::image::Handle::from_path(&path);
+            tasks.push(iced::widget::image::allocate(handle).map(move |r| Message::Allocated(path.clone(), r)));
+        }
+        if self.textures.len() > KEEP {
+            let mut ticks: Vec<u64> = self.textures.values().map(|e| e.1).collect();
+            ticks.sort_unstable();
+            let cutoff = ticks[self.textures.len() - KEEP];
+            self.textures.retain(|_, e| e.1 >= cutoff);
+        }
+        Task::batch(tasks)
+    }
+
     pub fn scanning(&self) -> bool {
         self.scanning
     }
@@ -200,6 +332,11 @@ impl App {
             async { tokio::task::spawn_blocking(sources::scan_all).await.unwrap_or_default() },
             |r| Message::Scanned(Arc::new(r)),
         )
+    }
+
+    /// Progress of the crossfade to the selected game, 0..1.
+    pub fn fade(&self) -> f32 {
+        self.ambient_t.get()
     }
 
     /// Current blended (ambient, accent) colours of the background.
@@ -225,14 +362,22 @@ impl App {
         match message {
             Message::Pad(PadEvent::Connected(kind)) => self.pad = kind,
             Message::Pad(PadEvent::Disconnected) => self.pad = PadKind::Keyboard,
-            Message::Pad(PadEvent::Press(a)) => self.press(a),
+            Message::Pad(PadEvent::Press(a)) => {
+                self.press(a);
+                return self.prewarm();
+            }
             Message::Pad(PadEvent::Release(a)) => self.release(a),
             Message::Key(a, true) => {
                 self.pad = PadKind::Keyboard;
-                self.press(a)
+                self.press(a);
+                return self.prewarm();
             }
             Message::Key(a, false) => self.release(a),
-            Message::Frame(now) => self.frame(now),
+            Message::Frame(now) => {
+                self.frame(now);
+                // Held-direction repeats move focus from here.
+                return self.prewarm();
+            }
             Message::Tick => self.clock = Local::now(),
             Message::Rescan => return self.rescan(),
             Message::Scanned(results) => {
@@ -247,12 +392,43 @@ impl App {
                         Ok(true) => {
                             let games = library::from_rows(store.load().unwrap_or_default());
                             self.set_library(games);
+                            return Task::batch([self.queue_art(), self.prewarm()]);
                         }
                         Ok(false) => {}
                         Err(e) => eprintln!("saving library failed: {e}"),
                     }
                 }
             }
+            Message::ArtFetched(id, a, with_key) => {
+                self.art_in_flight -= 1;
+                self.art_queued.remove(&id);
+                if let Some(store) = &self.store {
+                    if let Err(e) = store.save_art(&id, &a, with_key) {
+                        eprintln!("saving art failed: {e}");
+                    }
+                }
+                self.art_meta.insert(id.clone(), (chrono::Utc::now().timestamp(), with_key));
+                if let Some(gi) = self.games.iter().position(|g| g.id == id) {
+                    apply_colors(&mut self.games[gi], Some(&a));
+                    if gi == self.selected {
+                        let g = &self.games[gi];
+                        self.ambient_to = (g.ambient, g.accent);
+                    }
+                }
+                self.art.insert(id, a);
+                self.prewarmed_for = usize::MAX;
+                return Task::batch([self.pump_art(), self.prewarm()]);
+            }
+            Message::Allocated(path, result) => match result {
+                Ok(a) => {
+                    if let Some(slot) = self.textures.get_mut(&path) {
+                        slot.0 = Some(a);
+                    }
+                }
+                Err(_) => {
+                    self.textures.remove(&path);
+                }
+            },
             Message::DevShoot => return devtools::shoot(),
             Message::DevShot(s) => return devtools::save(s),
             Message::Resized(logical) => {
@@ -366,6 +542,7 @@ impl App {
         }
         let Some(&game) = self.shelves.get(self.row).and_then(|s| s.games.get(self.cols[self.row])) else { return };
         if game != self.selected {
+            self.prev_selected = (self.selected < self.games.len()).then_some(self.selected);
             self.selected = game;
             let cur = self.ambient();
             self.ambient_from = cur;
@@ -421,5 +598,15 @@ impl App {
 
     fn view(&self) -> iced::Element<'_, Message> {
         ui::home::view(self)
+    }
+}
+
+fn apply_colors(g: &mut Game, art: Option<&art::Art>) {
+    let c = |hex: u32| Color::from_rgb8((hex >> 16) as u8, (hex >> 8) as u8, hex as u8);
+    if let Some(a) = art {
+        if let (Some(amb), Some(acc)) = (a.ambient, a.accent) {
+            g.ambient = c(amb);
+            g.accent = c(acc);
+        }
     }
 }
