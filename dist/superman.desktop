@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Superman
+Comment=Controller-first game launcher
+Exec=superman-frontend --fullscreen
+Icon=superman
+Categories=Game;
+Terminal=false

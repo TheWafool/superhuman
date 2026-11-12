@@ -1,0 +1,24 @@
+# Arch / CachyOS. Build from a checkout: `makepkg -si` in this folder (uses the repo two levels up).
+pkgname=superman-frontend
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Controller-first game launcher for Steam, Heroic, Lutris, itch, emulators and more'
+arch=(x86_64 aarch64)
+license=(custom)
+depends=(gcc-libs libxkbcommon vulkan-icd-loader)
+makedepends=(cargo)
+optdepends=('gamescope: session mode' 'umu-launcher: run Windows games with Proton')
+source=()
+
+build() {
+  cd "$startdir/../.."
+  cargo build --release --locked --target-dir "$srcdir/target"
+}
+
+package() {
+  cd "$startdir/../.."
+  install -Dm755 "$srcdir/target/release/superman-frontend" "$pkgdir/usr/bin/superman-frontend"
+  install -Dm644 dist/superman.desktop "$pkgdir/usr/share/applications/superman.desktop"
+  install -Dm755 dist/superman-session "$pkgdir/usr/bin/superman-session"
+  install -Dm644 dist/superman-session.desktop "$pkgdir/usr/share/wayland-sessions/superman.desktop"
+}

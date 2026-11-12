@@ -3,6 +3,8 @@
 pub mod bottles;
 pub mod desktop;
 pub mod emulation;
+pub mod epic;
+pub mod gog;
 pub mod heroic;
 pub mod itch;
 pub mod lutris;
@@ -82,13 +84,15 @@ pub struct ScanResult {
 
 /// Run every scanner. Sources that aren't installed return an empty Ok.
 pub fn scan_all() -> Vec<ScanResult> {
-    let scanners: [(Source, fn() -> Result<Vec<Discovered>, String>); 9] = [
+    let scanners: [(Source, fn() -> Result<Vec<Discovered>, String>); 11] = [
         (Source::Steam, steam::scan),
         (Source::Lutris, lutris::scan),
         (Source::Heroic, heroic::scan),
         (Source::Desktop, desktop::scan),
         (Source::Bottles, bottles::scan),
         (Source::Itch, itch::scan),
+        (Source::Epic, epic::scan),
+        (Source::Gog, gog::scan),
         (Source::Prism, prism::scan),
         (Source::Emulation, emulation::scan),
         (Source::Manual, manual::scan),

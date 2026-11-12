@@ -19,6 +19,8 @@ pub enum Source {
     Prism,
     Bottles,
     Itch,
+    Epic,
+    Gog,
     /// Added by hand in `games.toml`.
     Manual,
 }
@@ -32,6 +34,8 @@ impl Source {
             Source::Lutris => 2,
             Source::Manual => 3,
             Source::Itch => 4,
+            Source::Epic => 10,
+            Source::Gog => 11,
             Source::Bottles => 5,
             Source::Prism => 6,
             Source::Emulation => 7,
@@ -51,6 +55,8 @@ impl Source {
             Source::Prism => "Prism Launcher",
             Source::Bottles => "Bottles",
             Source::Itch => "itch",
+            Source::Epic => "Epic Games",
+            Source::Gog => "GOG",
             Source::Manual => "your games list",
         }
     }
@@ -66,6 +72,8 @@ impl Source {
             Source::Prism => "prism",
             Source::Bottles => "bottles",
             Source::Itch => "itch",
+            Source::Epic => "epic",
+            Source::Gog => "gog",
             Source::Manual => "manual",
         }
     }
@@ -81,6 +89,8 @@ impl Source {
             "prism" => Source::Prism,
             "bottles" => Source::Bottles,
             "itch" => Source::Itch,
+            "epic" => Source::Epic,
+            "gog" => Source::Gog,
             "manual" => Source::Manual,
             _ => return None,
         })
@@ -231,6 +241,8 @@ pub const SHELVES: &[ShelfDef] = &[
     ShelfDef { title: "Heroic", filter: |g| g.source == Source::Heroic, by_recent: false, limit: usize::MAX },
     ShelfDef { title: "Lutris", filter: |g| g.source == Source::Lutris, by_recent: false, limit: usize::MAX },
     ShelfDef { title: "itch", filter: |g| g.source == Source::Itch, by_recent: false, limit: usize::MAX },
+    ShelfDef { title: "Epic Games", filter: |g| g.source == Source::Epic, by_recent: false, limit: usize::MAX },
+    ShelfDef { title: "GOG", filter: |g| g.source == Source::Gog, by_recent: false, limit: usize::MAX },
     ShelfDef { title: "Bottles", filter: |g| g.source == Source::Bottles, by_recent: false, limit: usize::MAX },
     ShelfDef { title: "Added by you", filter: |g| g.source == Source::Manual, by_recent: false, limit: usize::MAX },
     ShelfDef { title: "Minecraft instances", filter: |g| g.source == Source::Prism, by_recent: false, limit: usize::MAX },
@@ -252,6 +264,8 @@ pub const FILTERS: &[FilterDef] = &[
     FilterDef { label: "Heroic", filter: |g| g.source == Source::Heroic },
     FilterDef { label: "Lutris", filter: |g| g.source == Source::Lutris },
     FilterDef { label: "itch", filter: |g| g.source == Source::Itch },
+    FilterDef { label: "Epic Games", filter: |g| g.source == Source::Epic },
+    FilterDef { label: "GOG", filter: |g| g.source == Source::Gog },
     FilterDef { label: "Bottles", filter: |g| g.source == Source::Bottles },
     FilterDef { label: "Added by you", filter: |g| g.source == Source::Manual },
     FilterDef { label: "Minecraft", filter: |g| g.source == Source::Prism },

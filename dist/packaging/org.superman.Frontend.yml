@@ -1,0 +1,30 @@
+# Flatpak manifest (untested). Games run on the host, so the sandbox needs --talk-name=org.freedesktop.Flatpak
+# or flatpak-spawn --host; until that is sorted, prefer the native packages.
+app-id: org.superman.Frontend
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions: [org.freedesktop.Sdk.Extension.rust-stable]
+command: superman-frontend
+finish-args:
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=all
+  - --filesystem=home:ro
+  - --talk-name=org.freedesktop.Flatpak
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/superman/cargo
+modules:
+  - name: superman
+    buildsystem: simple
+    build-commands:
+      - cargo build --release --offline
+      - install -Dm755 target/release/superman-frontend /app/bin/superman-frontend
+      - install -Dm644 dist/superman.desktop /app/share/applications/org.superman.Frontend.desktop
+    sources:
+      - type: dir
+        path: ../..
+      - cargo-sources.json

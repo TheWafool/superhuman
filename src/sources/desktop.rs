@@ -29,6 +29,9 @@ fn app_dirs() -> Vec<PathBuf> {
 }
 
 pub fn scan() -> Result<Vec<Discovered>, String> {
+    if cfg!(target_os = "macos") {
+        return Ok(mac_apps());
+    }
     let mut out = Vec::new();
     let mut seen_ids = HashSet::new();
     for dir in app_dirs() {
@@ -132,6 +135,35 @@ fn split_exec(exec: &str) -> Vec<String> {
         .filter(|a| !matches!(a.as_str(), "@@" | "@@u" | "@@f"))
         .map(|a| a.replace("%%", "%"))
         .collect()
+}
+
+/// macOS: apps in /Applications whose Info.plist category is a games one.
+/// Reads through `defaults`, which copes with binary plists.
+fn mac_apps() -> Vec<Discovered> {
+    let dirs = [PathBuf::from("/Applications"), super::home().join("Applications")];
+    let mut out = Vec::new();
+    for e in dirs.iter().filter_map(|d| std::fs::read_dir(d).ok()).flatten().flatten() {
+        let path = e.path();
+        if path.extension().is_none_or(|x| x != "app") {
+            continue;
+        }
+        let info = path.join("Contents/Info");
+        let cat = std::process::Command::new("defaults").args(["read", &info.to_string_lossy(), "LSApplicationCategoryType"]).output();
+        if !cat.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("games")) {
+            continue;
+        }
+        let title = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        out.push(Discovered {
+            source: Source::Desktop,
+            source_id: title.to_lowercase().replace(' ', "-"),
+            launch: LaunchSpec::cmd("open", ["-W".to_owned(), path.to_string_lossy().into_owned()]),
+            title,
+            minutes_played: 0,
+            last_played: None,
+            steam_appid: None,
+        });
+    }
+    out
 }
 
 #[cfg(test)]
