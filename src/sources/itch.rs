@@ -98,11 +98,13 @@ mod tests {
             r#"{"basePath":"/games/celeste","candidates":[{"path":"Celeste.exe","flavor":"windows"},{"path":"bin/Celeste","flavor":"linux"}]}"#,
         )
         .unwrap();
-        let LaunchSpec::Command { program, cwd, .. } = launch(&v).unwrap();
+        // No macOS build in this verdict, so only Linux and Windows find one.
         if cfg!(target_os = "linux") {
+            let LaunchSpec::Command { program, cwd, .. } = launch(&v).unwrap();
             assert_eq!(program, "/games/celeste/bin/Celeste");
             assert_eq!(cwd.as_deref(), Some("/games/celeste/bin"));
         }
+        assert_eq!(launch(&v).is_some(), !cfg!(target_os = "macos"));
         assert_eq!(parse_time("2024-03-05 10:20:30.123+00:00"), Some(1709634030));
     }
 

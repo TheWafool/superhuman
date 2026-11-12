@@ -54,6 +54,9 @@ fn main() -> iced::Result {
             min_size: Some(Size::new(960.0, 540.0)),
             fullscreen,
             icon: window::icon::from_file_data(include_bytes!("../dist/superhuman.png"), None).ok(),
+            // Wayland desktops take the taskbar icon from the desktop entry with this name.
+            #[cfg(target_os = "linux")]
+            platform_specific: window::settings::PlatformSpecific { application_id: "superhuman".into(), ..Default::default() },
             ..Default::default()
         })
         .antialiasing(true);

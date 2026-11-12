@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- Three game cards fanned like a shelf; the front one is ready to play. -->
-  <g transform="translate(256 270)">
-    <rect x="-86" y="-122" width="172" height="232" rx="26" fill="#4A4380" transform="rotate(-16 0 100)"/>
-    <rect x="-86" y="-122" width="172" height="232" rx="26" fill="#7A72B0" transform="rotate(16 0 100)"/>
-    <rect x="-90" y="-132" width="180" height="244" rx="28" fill="#FFB547"/>
-    <path d="M-28 -52 Q-28 -70 -12 -61 L48 -24 Q62 -15 48 -6 L-12 31 Q-28 40 -28 22 Z" fill="#16142A"/>
-  </g>
-</svg>

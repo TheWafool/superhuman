@@ -4,5 +4,6 @@ Name=Superhuman
 Comment=Controller-first game launcher
 Exec=superhuman --fullscreen
 Icon=superhuman
+StartupWMClass=superhuman
 Categories=Game;
 Terminal=false

@@ -15,7 +15,7 @@ const PANEL_W: f32 = 560.0;
 const PAD: f32 = 56.0;
 /// One handle for the app's lifetime, so the image is decoded and uploaded once.
 static LOGO: std::sync::LazyLock<image::Handle> =
-    std::sync::LazyLock::new(|| image::Handle::from_bytes(&include_bytes!("../../dist/superhuman-mark.png")[..]));
+    std::sync::LazyLock::new(|| image::Handle::from_bytes(&include_bytes!("../../dist/superhuman.png")[..]));
 
 fn group(m: MenuItem) -> u8 {
     match m {
@@ -28,7 +28,7 @@ fn group(m: MenuItem) -> u8 {
 pub fn view(app: &App) -> Element<'_, Message> {
     let focus = app.menu.unwrap_or(0);
 
-    let logo = image(LOGO.clone()).width(47).height(44);
+    let logo = image(LOGO.clone()).width(48).height(48);
     let clock = text(app.clock_text()).size(size::XL).font(display(Weight::ExtraBold)).line_height(1.0);
     let mut head = column![row![logo, clock].spacing(18).align_y(iced::Alignment::Center)].spacing(10);
     let sub = match &app.session {
